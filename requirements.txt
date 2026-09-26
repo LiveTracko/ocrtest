@@ -1,0 +1,25 @@
+# Core dependencies — Python 3.11+ / Windows
+pymupdf>=1.23.0
+opencv-python>=4.8.0
+pillow>=10.0.0
+numpy>=1.26.0
+
+# OCR
+paddleocr>=2.7.0
+# NOTE (Windows): PaddlePaddle CPU wheel is large (~100-200 MB).
+# If `pip install paddlepaddle` fails, follow:
+# https://www.paddlepaddle.org.cn/en/install/quick  (choose CPU / Windows / pip)
+# Then re-run: pip install -r requirements.txt
+paddlepaddle>=2.5.0
+
+# Gemini — official SDK
+google-genai>=1.0.0
+
+# Validation / Excel / config
+pydantic>=2.5.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+python-dotenv>=1.0.0
+
+# Dev / tests (optional)
+pytest>=8.0.0
