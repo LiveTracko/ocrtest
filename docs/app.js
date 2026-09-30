@@ -17,7 +17,7 @@ const VALID_RELATIONS = ["FATHER","MOTHER","HUSBAND","WIFE","OTHER"];
 const RATES = {
   'gemini-3.8-flash': { in: 0.75, out: 3.75 },
   'gemini-2.5-flash': { in: 0.30, out: 2.50 },
-  'gemini-2.5-flash-lite': { in: 0.10, out: 0.40 }
+  'gemini-3.5-flash-lite': { in: 0.30, out: 2.50 }
 };
 const USD_INR = 88; // approx display rate
 let runCostUSD = 0, runPaidCalls = 0;
