@@ -34,11 +34,13 @@
       </label>
       <label>Quality
         <select id="quality">
+          <option value="1.5">Draft (cheapest, test first)</option>
           <option value="2" selected>Standard (cheap, 144 DPI)</option>
           <option value="3">High (costlier, 216 DPI)</option>
         </select>
       </label>
       <label class="chk"><input id="useOcr" type="checkbox" checked> Use OCR (slower, helps Gemini)</label>
+      <label class="chk"><input id="deepThink" type="checkbox" checked> Deep thinking (better accuracy, costs more)</label>
     </div>
     <p class="hint" id="keyMsg">Get a free key: <a href="https://aistudio.google.com" target="_blank">aistudio.google.com → Get API key</a>. It stays in this browser only (localStorage).</p>
   </div>

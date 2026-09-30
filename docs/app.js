@@ -37,7 +37,7 @@ function charge(model, usage, label) {
 }
 
 function pagePrompt(pageNum, ocrText) {
-  return `Extract voter records from this Indian electoral-roll page scan. IMAGE is truth; OCR below is supporting only (correct it from image). Never guess/invent/merge/split voters; unreadable -> null + needs_review.\nPage: ${pageNum}\nOCR (may err):\n---\n${ocrText}\n---\nReturn JSON ONLY, no fences:\n{"page_number": ${pageNum}, "voters": [{"serial_number": 1, "epic_number": "ABC1234567", "name": "RAMESH KUMAR", "relation_type": "FATHER", "relation_name": "SURESH KUMAR", "house_number": "125", "age": 45, "gender": "Male", "confidence": "HIGH", "needs_review": false, "review_reason": null}]}\nrelation_type: FATHER/MOTHER/HUSBAND/WIFE/OTHER/null. gender: Male/Female/Other/null. confidence HIGH only if all fields clear; else MEDIUM/LOW + needs_review + review_reason. Copy EPIC/house_number EXACTLY. age integer/null. Empty page -> {"page_number": N, "voters": []}.`;
+  return `Extract voter records from this Indian electoral-roll page scan. IMAGE is truth; OCR below is supporting only (correct it from image). Never guess/invent/merge/split voters; unreadable -> null + needs_review.\nPage: ${pageNum}\nOCR (may err):\n---\n${ocrText}\n---\nReturn JSON ONLY, no fences:\n{"page_number": ${pageNum}, "voters": [{"serial_number": 1, "epic_number": "ABC1234567", "name": "RAMESH KUMAR", "relation_type": "FATHER", "relation_name": "SURESH KUMAR", "house_number": "125", "age": 45, "gender": "Male", "confidence": "HIGH", "needs_review": false, "review_reason": null}]}\nrelation_type: FATHER/MOTHER/HUSBAND/WIFE/OTHER/null. gender: Male/Female/Other/null. confidence HIGH only if all fields clear; else MEDIUM/LOW + needs_review + review_reason. Copy EPIC/house_number EXACTLY. age integer/null. To keep output small you MAY omit needs_review when false and review_reason when null; always include every other field with exact names. Empty page -> {"page_number": N, "voters": []}.`;
 }
 
 let running = false, stopAsked = false;
@@ -63,8 +63,8 @@ function progress() {
 }
 
 // ---------- page cache (same file+page+settings -> reuse, ₹0, identical data) ----------
-function cacheKey(job, pageNum, model, scale, useOcr) {
-  return [job.file.name, job.file.size, job.file.lastModified, pageNum, model, scale, useOcr ? 1 : 0].join('|');
+function cacheKey(job, pageNum, model, scale, useOcr, deepThink) {
+  return [job.file.name, job.file.size, job.file.lastModified, pageNum, model, scale, useOcr ? 1 : 0, deepThink ? 1 : 0].join('|');
 }
 function loadCache() { try { return JSON.parse(localStorage.getItem('vrCacheV1') || '{}'); } catch (e) { return {}; } }
 function readCached(key) { const c = loadCache(); return c[key] || null; }
@@ -149,11 +149,12 @@ async function start() {
     const model = document.getElementById('model').value;
     const scale = parseFloat(document.getElementById('quality').value);
     const useOcr = document.getElementById('useOcr').checked;
+    const deepThink = document.getElementById('deepThink').checked;
 
     for (const j of jobs) {
       for (let p = j.lo; p <= j.hi; p++) {
         if (stopAsked) { log('Stopped by user. Rows so far are kept — download anytime.'); break; }
-        await processPage(j, p, key, model, scale, useOcr);
+        await processPage(j, p, key, model, scale, useOcr, deepThink);
         doneCount++;
         progress();
         renderPreview();
@@ -174,9 +175,9 @@ async function start() {
 
 function stop() { stopAsked = true; }
 
-async function processPage(job, pageNum, key, model, scale, useOcr) {
+async function processPage(job, pageNum, key, model, scale, useOcr, deepThink) {
   const label = `${job.file.name} p.${pageNum}`;
-  const ck = cacheKey(job, pageNum, model, scale, useOcr);
+  const ck = cacheKey(job, pageNum, model, scale, useOcr, deepThink);
   const hit = readCached(ck);
   if (hit) {
     log(`${label}: cache hit — reused stored rows, ₹0`);
@@ -215,7 +216,7 @@ async function processPage(job, pageNum, key, model, scale, useOcr) {
     const jpg = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
     canvas.width = canvas.height = 0; // free memory
     log(`${label}: Gemini…`);
-    const { data, usage } = await callGemini(key, model, pageNum, ocrText, jpg);
+    const { data, usage } = await callGemini(key, model, pageNum, ocrText, jpg, deepThink);
     charge(model, usage, label);
     const rows = validateRows(data, pageNum);
     for (const r of rows.voters) allVoters.push({ ...r, _page: pageNum, _source: job.file.name });
@@ -229,12 +230,13 @@ async function processPage(job, pageNum, key, model, scale, useOcr) {
   }
 }
 
-async function callGemini(key, model, pageNum, ocrText, b64) {
+async function callGemini(key, model, pageNum, ocrText, b64, deepThink) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
   const body = {
     contents: [{ parts: [{ text: pagePrompt(pageNum, ocrText) },
       { inline_data: { mime_type: 'image/jpeg', data: b64 } }] }],
-    generationConfig: { responseMimeType: 'application/json', temperature: 0 }
+    generationConfig: { responseMimeType: 'application/json', temperature: 0,
+      ...(deepThink ? {} : { thinkingConfig: { thinkingBudget: 0 } }) }
   };
   let lastErr = 'unknown';
   for (let a = 1; a <= 3; a++) {
