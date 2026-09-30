@@ -63,8 +63,8 @@ function progress() {
 }
 
 // ---------- page cache (same file+page+settings -> reuse, ₹0, identical data) ----------
-function cacheKey(job, pageNum, model, scale, useOcr, deepThink) {
-  return [job.file.name, job.file.size, job.file.lastModified, pageNum, model, scale, useOcr ? 1 : 0, deepThink ? 1 : 0].join('|');
+function cacheKey(job, pageNum, model, scale, useOcr, thinkLevel) {
+  return [job.file.name, job.file.size, job.file.lastModified, pageNum, model, scale, useOcr ? 1 : 0, thinkLevel].join('|');
 }
 function loadCache() { try { return JSON.parse(localStorage.getItem('vrCacheV1') || '{}'); } catch (e) { return {}; } }
 function readCached(key) { const c = loadCache(); return c[key] || null; }
@@ -149,12 +149,12 @@ async function start() {
     const model = document.getElementById('model').value;
     const scale = parseFloat(document.getElementById('quality').value);
     const useOcr = document.getElementById('useOcr').checked;
-    const deepThink = document.getElementById('deepThink').checked;
+    const thinkLevel = document.getElementById('thinkLevel').value;
 
     for (const j of jobs) {
       for (let p = j.lo; p <= j.hi; p++) {
         if (stopAsked) { log('Stopped by user. Rows so far are kept — download anytime.'); break; }
-        await processPage(j, p, key, model, scale, useOcr, deepThink);
+        await processPage(j, p, key, model, scale, useOcr, thinkLevel);
         doneCount++;
         progress();
         renderPreview();
@@ -175,9 +175,9 @@ async function start() {
 
 function stop() { stopAsked = true; }
 
-async function processPage(job, pageNum, key, model, scale, useOcr, deepThink) {
+async function processPage(job, pageNum, key, model, scale, useOcr, thinkLevel) {
   const label = `${job.file.name} p.${pageNum}`;
-  const ck = cacheKey(job, pageNum, model, scale, useOcr, deepThink);
+  const ck = cacheKey(job, pageNum, model, scale, useOcr, thinkLevel);
   const hit = readCached(ck);
   if (hit) {
     log(`${label}: cache hit — reused stored rows, ₹0`);
@@ -216,7 +216,7 @@ async function processPage(job, pageNum, key, model, scale, useOcr, deepThink) {
     const jpg = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
     canvas.width = canvas.height = 0; // free memory
     log(`${label}: Gemini…`);
-    const { data, usage, note } = await callGemini(key, model, pageNum, ocrText, jpg, deepThink);
+    const { data, usage, note } = await callGemini(key, model, pageNum, ocrText, jpg, thinkLevel);
     if (note) log(`${label}: ${note}`);
     charge(model, usage, label);
     const rows = validateRows(data, pageNum);
@@ -231,21 +231,22 @@ async function processPage(job, pageNum, key, model, scale, useOcr, deepThink) {
   }
 }
 
-async function callGemini(key, model, pageNum, ocrText, b64, deepThink) {
+async function callGemini(key, model, pageNum, ocrText, b64, thinkLevel) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
-  const mkBody = (noThink) => ({
+  const mkBody = (budget) => ({
     contents: [{ parts: [{ text: pagePrompt(pageNum, ocrText) },
       { inline_data: { mime_type: 'image/jpeg', data: b64 } }] }],
     generationConfig: { responseMimeType: 'application/json', temperature: 0,
-      ...(noThink ? { thinkingConfig: { thinkingBudget: 0 } } : {}) }
+      ...(budget === null ? {} : { thinkingConfig: { thinkingBudget: budget } }) }
   });
-  // Some models (e.g. *-flash-lite) reject thinkingBudget -> INVALID_ARGUMENT.
-  // Then fall back to default reasoning once instead of failing the page.
-  const tries = deepThink ? [false] : [true, false];
+  // Thinking budgets are model-limited (e.g. lite rejects 0). A rejected
+  // budget falls back to full reasoning once instead of failing the page.
+  // Levels: full -> default | light -> 256 then default | off -> 0 then default.
+  const budgets = thinkLevel === 'full' ? [null] : thinkLevel === 'light' ? [256, null] : [0, null];
   let note = null;
-  for (let t = 0; t < tries.length; t++) {
-    const noThink = tries[t];
-    const body = mkBody(noThink);
+  for (let t = 0; t < budgets.length; t++) {
+    const budget = budgets[t];
+    const body = mkBody(budget);
     let lastErr = 'unknown';
     for (let a = 1; a <= 3; a++) {
       try {
@@ -257,8 +258,8 @@ async function callGemini(key, model, pageNum, ocrText, b64, deepThink) {
         }
         if (!res.ok) {
           const txt = await res.text();
-          if (noThink && res.status === 400 && /thinking|invalid argument/i.test(txt)) {
-            note = `thinking toggle not supported by ${model} — retried with default reasoning (costs more)`;
+          if (budget !== null && res.status === 400 && /thinking|invalid argument/i.test(txt)) {
+            note = `thinking '${thinkLevel}' not supported by ${model} — retried with full reasoning (costs more)`;
             lastErr = '__FALLBACK__';
             break;
           }
@@ -276,7 +277,7 @@ async function callGemini(key, model, pageNum, ocrText, b64, deepThink) {
         await sleep(2000 * Math.pow(2, a - 1));
       }
     }
-    if (lastErr === '__FALLBACK__') continue; // retry same page with default reasoning
+    if (lastErr === '__FALLBACK__') continue; // retry same page with full reasoning
     throw new Error('Gemini failed after 3 tries: ' + lastErr);
   }
   throw new Error('Gemini failed: thinking fallback exhausted');
@@ -323,6 +324,9 @@ function validateRows(data, pageNum) {
     else if (!EPIC_RE.test(v.epic_number)) { issues.push(`serial=${v.serial_number}: EPIC '${v.epic_number}' non-standard -> review`); flag('EPIC non-standard'); }
     if (v.epic_number) seenEpic[v.epic_number] = (seenEpic[v.epic_number] || 0) + 1;
     if (v.serial_number != null) seenSerial[v.serial_number] = (seenSerial[v.serial_number] || 0) + 1;
+    // Safety net for compact output: a row carrying a review reason must
+    // never be marked OK, even if needs_review was omitted.
+    if (!v.needs_review && v.review_reason) v.needs_review = true;
     voters.push(v);
   }
   for (const [e, n] of Object.entries(seenEpic)) if (n > 1) issues.push(`duplicate EPIC within page: ${e} x${n}`);
