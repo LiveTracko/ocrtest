@@ -20,11 +20,14 @@ const RATES = {
   'gemini-3.5-flash-lite': { in: 0.30, out: 2.50 }
 };
 const USD_INR = 88; // approx display rate
+const GST_RATE = 0.18; // India billing adds ~18% GST on top — meter shows both
 let runCostUSD = 0, runPaidCalls = 0;
 
 function renderCost() {
   document.getElementById('cost').textContent =
     `Cost this run: ₹${(runCostUSD * USD_INR).toFixed(2)} ($${runCostUSD.toFixed(4)}) • ${runPaidCalls} paid call(s)`;
+  document.getElementById('costTax').textContent =
+    `Incl. ~18% GST ≈ ₹${(runCostUSD * USD_INR * (1 + GST_RATE)).toFixed(2)} (what Google balance will show)`;
 }
 
 function charge(model, usage, label) {
@@ -162,7 +165,7 @@ async function start() {
       if (stopAsked) break;
     }
     document.getElementById('upMsg').textContent =
-      `Finished: ${allVoters.length} rows, ${pageIssues.length} review notes. Cost this run: ₹${(runCostUSD * USD_INR).toFixed(2)} (${runPaidCalls} paid calls). Download your Excel below.`;
+      `Finished: ${allVoters.length} rows, ${pageIssues.length} review notes. Cost this run: ₹${(runCostUSD * USD_INR).toFixed(2)} (≈ ₹${(runCostUSD * USD_INR * (1 + GST_RATE)).toFixed(2)} incl. GST, ${runPaidCalls} paid calls). Download your Excel below.`;
     log(`Done. ${allVoters.length} rows. Download voters.xlsx now.`);
   } catch (e) {
     document.getElementById('upMsg').textContent = 'Error: ' + e.message;
