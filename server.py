@@ -18,6 +18,7 @@ Pipeline code is reused unchanged via job_runner.py.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import time
@@ -235,6 +236,33 @@ def download(job_id: str, kind: str = "voters"):
     media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" \
         if path.suffix == ".xlsx" else "application/json"
     return FileResponse(str(path), media_type=media, filename=f"{job_id}_{path.name}")
+
+
+@app.get("/api/jobs/{job_id}/preview")
+def preview(job_id: str, limit: int = 50) -> dict:
+    """Return first N rows of the job's Excel as JSON for in-browser preview.
+
+    Prefers merged_voters.xlsx when a merge was downloaded, else voters.xlsx.
+    Works mid-run too (shows the interim Excel built after every page).
+    """
+    if not job_runner.load_meta(job_id):
+        raise HTTPException(status_code=404, detail="Job not found.")
+    files = _job_files(job_id)
+    path = files["merged_voters"] if files["merged_voters"].exists() else files["voters"]
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Excel not ready yet — pages still processing.")
+    limit = max(1, min(limit, 200))
+    try:
+        df = pd.read_excel(path, sheet_name="VOTERS")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Cannot read Excel: {exc}")
+    total = len(df)
+    head = df.head(limit)
+    # to_json maps NaN/NaT -> null so the browser gets clean JSON
+    rows = json.loads(head.to_json(orient="records"))
+    return {"job_id": job_id, "file": path.name, "total_rows": total,
+            "shown_rows": len(rows), "columns": [str(c) for c in df.columns],
+            "rows": rows}
 
 
 # ---------------------------------------------------------------- merge

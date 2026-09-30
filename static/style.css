@@ -18,3 +18,8 @@ th, td { border-bottom: 1px solid #eee; padding: 6px; text-align: left; }
 .done { background: #15803d; } .failed { background: #b91c1c; }
 pre { background: #0b1020; color: #c8e6c9; padding: 12px; border-radius: 8px; max-height: 320px; overflow: auto; font-size: 12px; }
 a.dl { margin-right: 8px; font-size: 12px; }
+.tblwrap { overflow: auto; max-height: 380px; border: 1px solid #e5e7eb; border-radius: 8px; margin: 8px 0; }
+.tblwrap table { font-size: 12px; }
+.tblwrap th { position: sticky; top: 0; background: #1F4E78; color: #fff; }
+#dlRow a button { background: #15803d; }
+#preview { margin-top: 6px; }

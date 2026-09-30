@@ -98,6 +98,9 @@ async function loadJobs() {
 
 async function watchJob(id) {
   selected = id;
+  failCount = 0;
+  document.getElementById('preview').innerHTML = '';
+  document.getElementById('dlRow').style.display = 'none';
   if (pollTimer) clearInterval(pollTimer);
   await refreshDetail();
   pollTimer = setInterval(refreshDetail, 4000);
@@ -118,6 +121,15 @@ async function refreshDetail() {
       (j.error ? `<br>Error: ${escapeHtml(j.error)}` : '');
     const l = await apiJson(`/api/jobs/${selected}/logs?tail=120`);
     document.getElementById('logs').textContent = (l.logs || []).join('\n');
+    // Wire the big Preview / Download buttons for this job.
+    const dlRow = document.getElementById('dlRow');
+    if (j.has_voters || j.has_review) {
+      dlRow.style.display = 'flex';
+      document.getElementById('dlExcel').href = `/api/jobs/${selected}/download?kind=voters`;
+      document.getElementById('dlReview').href = `/api/jobs/${selected}/download?kind=review`;
+    } else {
+      dlRow.style.display = 'none';
+    }
     if (j.status === 'done' || j.status === 'failed') { clearInterval(pollTimer); loadJobs(); }
   } catch (e) {
     // Job may vanish if the free server restarted (disk is temporary).
@@ -132,6 +144,26 @@ async function refreshDetail() {
     } else {
       document.getElementById('detail').innerHTML = '⏳ ' + escapeHtml(e.message);
     }
+  }
+}
+
+async function loadPreview() {
+  if (!selected) return;
+  const box = document.getElementById('preview');
+  box.innerHTML = '<p class="hint">Loading preview…</p>';
+  try {
+    const p = await apiJson(`/api/jobs/${selected}/preview?limit=50`);
+    if (!p.rows.length) { box.innerHTML = '<p class="hint">Excel is empty (no rows yet).</p>'; return; }
+    let h = `<p class="hint">Showing ${p.shown_rows} of ${p.total_rows} rows from <b>${escapeHtml(p.file)}</b>. ` +
+      `<a href="/api/jobs/${selected}/download?kind=voters">Download full Excel</a></p>` +
+      '<div class="tblwrap"><table><tr>' +
+      p.columns.map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr>';
+    for (const r of p.rows) {
+      h += '<tr>' + p.columns.map(c => `<td>${escapeHtml(r[c] ?? '')}</td>`).join('') + '</tr>';
+    }
+    box.innerHTML = h + '</table></div>';
+  } catch (e) {
+    box.innerHTML = '<p class="hint">Preview not available yet: ' + escapeHtml(e.message) + '</p>';
   }
 }
 
