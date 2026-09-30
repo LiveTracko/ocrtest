@@ -161,6 +161,7 @@ async function start() {
         doneCount++;
         progress();
         renderPreview();
+        renderPages();
       }
       if (stopAsked) break;
     }
@@ -337,6 +338,37 @@ function validateRows(data, pageNum) {
   return { voters, issues, failed };
 }
 
+function renderPages() {
+  const box = document.getElementById('pages');
+  const byPage = {}; // "source||page" -> {page, source, rows, review, note}
+  for (const v of allVoters) {
+    const k = v._source + '||' + v._page;
+    const e = (byPage[k] = byPage[k] || { page: v._page, source: v._source, rows: 0, review: 0, note: '' });
+    e.rows++;
+    if (v.needs_review) e.review++;
+  }
+  // Pages with zero rows (blank-skipped / failed) still get a line.
+  for (const p of pageIssues) {
+    const k = p.source + '||' + p.page;
+    if (!byPage[k]) byPage[k] = { page: p.page, source: p.source, rows: 0, review: 0, note: p.issue };
+  }
+  const keys = Object.keys(byPage).sort((a, b) => {
+    const [sa, pa] = a.split('||'), [sb, pb] = b.split('||');
+    return sa < sb ? -1 : sa > sb ? 1 : (+pa) - (+pb);
+  });
+  let h = `<p><b>Total = ${allVoters.length} rows</b> across ${keys.length} page(s)</p>`;
+  if (!keys.length) { box.innerHTML = h + '<span class="hint">No pages yet…</span>'; return; }
+  const multi = new Set(keys.map(k => k.split('||')[0])).size > 1;
+  h += '<div class="tblwrap"><table><tr><th>Page number</th>' +
+    (multi ? '<th>File</th>' : '') + '<th>Rows</th><th>Review</th><th>Note</th></tr>';
+  for (const k of keys) {
+    const e = byPage[k];
+    h += `<tr><td>${esc(e.page)}</td>` + (multi ? `<td>${esc(e.source)}</td>` : '') +
+      `<td>${e.rows}</td><td>${e.review}</td><td>${esc(e.rows ? '' : (e.note || ''))}</td></tr>`;
+  }
+  box.innerHTML = h + '</table></div>';
+}
+
 // ---------- preview + Excel ----------
 function renderPreview() {
   const box = document.getElementById('preview');
@@ -382,6 +414,7 @@ function clearAll() {
   allVoters = []; pageIssues = []; doneCount = 0; totalCount = 0;
   runCostUSD = 0; runPaidCalls = 0; renderCost();
   document.getElementById('preview').innerHTML = '';
+  renderPages();
   document.getElementById('logs').textContent = '';
   document.getElementById('barFill').style.width = '0%';
   document.getElementById('status').textContent = 'Cleared.';
