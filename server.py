@@ -203,6 +203,38 @@ def get_job(job_id: str) -> dict:
     return meta
 
 
+@app.delete("/api/jobs/{job_id}")
+def delete_job(job_id: str) -> dict:
+    """Delete one job and ALL its files (PDF, pages, images, Excels).
+
+    Running jobs are refused — wait for them to finish first, otherwise
+    the background worker would keep writing into a deleted folder.
+    """
+    meta = job_runner.load_meta(job_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if meta.get("status") == "running":
+        raise HTTPException(status_code=400, detail="Job is still running — wait for it to finish first.")
+    shutil.rmtree(job_runner.job_root(job_id), ignore_errors=True)
+    return {"deleted": job_id}
+
+
+@app.delete("/api/jobs")
+def delete_all_jobs() -> dict:
+    """Clear all old jobs/Excels from the server. Running jobs are skipped."""
+    deleted: list[str] = []
+    skipped: list[str] = []
+    for meta in job_runner.list_jobs():
+        jid = meta.get("job_id", "")
+        if meta.get("status") == "running":
+            skipped.append(jid)
+            continue
+        shutil.rmtree(job_runner.job_root(jid), ignore_errors=True)
+        deleted.append(jid)
+    return {"deleted": deleted, "deleted_count": len(deleted),
+            "skipped_running": skipped}
+
+
 @app.get("/api/jobs/{job_id}/logs")
 def get_logs(job_id: str, tail: int = 200) -> dict:
     if not job_runner.load_meta(job_id):

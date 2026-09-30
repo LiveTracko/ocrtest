@@ -31,11 +31,13 @@
   </div>
 
   <div class="card">
-    <h2>2. Jobs <button class="small" onclick="loadJobs()">Refresh</button></h2>
+    <h2>2. Jobs <button class="small" onclick="loadJobs()">Refresh</button>
+      <button class="small danger" onclick="deleteAllJobs()">🗑 Delete all</button></h2>
     <p class="hint">Shared workspace — everyone sees all jobs. Tick 2+ finished jobs to merge.</p>
     <div id="jobs">Loading…</div>
     <button id="mergeBtn" onclick="mergeJobs()">Merge selected into one Excel</button>
     <span id="mergeMsg" class="msg"></span>
+    <span id="delMsg" class="msg"></span>
   </div>
 
   <div class="card">

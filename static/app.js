@@ -73,7 +73,7 @@ async function loadJobs() {
     const j = await apiJson('/api/jobs');
     failCount = 0;
     if (!j.jobs.length) { box.innerHTML = '<p class="hint">No jobs yet — upload a PDF.</p>'; return; }
-    let h = '<table><tr><th></th><th>Job</th><th>File</th><th>Status</th><th>Progress</th><th>Records</th><th>Download</th></tr>';
+    let h = '<table><tr><th></th><th>Job</th><th>File</th><th>Status</th><th>Progress</th><th>Records</th><th>Download</th><th></th></tr>';
     for (const job of j.jobs) {
       const done = (job.done_pages || []).length;
       const total = (job.pages && job.pages.length) || job.total_pages || 0;
@@ -88,7 +88,8 @@ async function loadJobs() {
           <a class="dl" href="/api/jobs/${job.job_id}/download?kind=voters">Excel</a>
           <a class="dl" href="/api/jobs/${job.job_id}/download?kind=review">Review</a>
           <a class="dl" href="/api/jobs/${job.job_id}/download?kind=report">Report</a>
-        </td></tr>`;
+        </td>
+        <td><a class="dl del" href="#" onclick="deleteJob('${job.job_id}');return false;" title="Delete this job and all its files">🗑</a></td></tr>`;
     }
     box.innerHTML = h + '</table>';
   } catch (e) {
@@ -164,6 +165,45 @@ async function loadPreview() {
     box.innerHTML = h + '</table></div>';
   } catch (e) {
     box.innerHTML = '<p class="hint">Preview not available yet: ' + escapeHtml(e.message) + '</p>';
+  }
+}
+
+async function deleteJob(id) {
+  if (!confirm('Delete job ' + id.slice(0, 8) + ' and ALL its files (PDF, images, Excels) from the server? Cannot undo.')) return;
+  try {
+    await apiJson('/api/jobs/' + id, { method: 'DELETE' });
+    if (selected === id) {
+      selected = null;
+      if (pollTimer) clearInterval(pollTimer);
+      document.getElementById('detail').innerHTML = 'Click a job ID to watch progress + logs.';
+      document.getElementById('logs').textContent = '';
+      document.getElementById('preview').innerHTML = '';
+      document.getElementById('dlRow').style.display = 'none';
+    }
+    loadJobs();
+  } catch (e) {
+    alert('Delete failed: ' + e.message);
+  }
+}
+
+async function deleteAllJobs() {
+  const msg = document.getElementById('delMsg');
+  if (!confirm('Delete ALL jobs and ALL Excels from the server? Running jobs are skipped. Cannot undo.')) return;
+  msg.textContent = 'Deleting…';
+  try {
+    const j = await apiJson('/api/jobs', { method: 'DELETE' });
+    let t = `Deleted ${j.deleted_count} job(s).`;
+    if (j.skipped_running && j.skipped_running.length) t += ` Skipped ${j.skipped_running.length} running job(s).`;
+    msg.textContent = t;
+    selected = null;
+    if (pollTimer) clearInterval(pollTimer);
+    document.getElementById('detail').innerHTML = 'Click a job ID to watch progress + logs.';
+    document.getElementById('logs').textContent = '';
+    document.getElementById('preview').innerHTML = '';
+    document.getElementById('dlRow').style.display = 'none';
+    loadJobs();
+  } catch (e) {
+    msg.textContent = 'Delete-all failed: ' + e.message;
   }
 }
 

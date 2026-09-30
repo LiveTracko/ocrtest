@@ -9,6 +9,8 @@ input[type=number] { width: 110px; padding: 6px; }
 select, input[type=file] { padding: 6px; }
 button { background: #0a58ca; color: #fff; border: 0; border-radius: 6px; padding: 9px 16px; cursor: pointer; }
 button.small { padding: 4px 10px; font-size: 12px; }
+button.small.danger { background: #b91c1c; }
+a.del { color: #b91c1c; font-size: 14px; }
 button:disabled { background: #999; }
 .msg { margin-left: 10px; font-size: 13px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
