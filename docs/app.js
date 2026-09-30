@@ -216,7 +216,8 @@ async function processPage(job, pageNum, key, model, scale, useOcr, deepThink) {
     const jpg = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
     canvas.width = canvas.height = 0; // free memory
     log(`${label}: Gemini…`);
-    const { data, usage } = await callGemini(key, model, pageNum, ocrText, jpg, deepThink);
+    const { data, usage, note } = await callGemini(key, model, pageNum, ocrText, jpg, deepThink);
+    if (note) log(`${label}: ${note}`);
     charge(model, usage, label);
     const rows = validateRows(data, pageNum);
     for (const r of rows.voters) allVoters.push({ ...r, _page: pageNum, _source: job.file.name });
@@ -232,38 +233,53 @@ async function processPage(job, pageNum, key, model, scale, useOcr, deepThink) {
 
 async function callGemini(key, model, pageNum, ocrText, b64, deepThink) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
-  const body = {
+  const mkBody = (noThink) => ({
     contents: [{ parts: [{ text: pagePrompt(pageNum, ocrText) },
       { inline_data: { mime_type: 'image/jpeg', data: b64 } }] }],
     generationConfig: { responseMimeType: 'application/json', temperature: 0,
-      ...(deepThink ? {} : { thinkingConfig: { thinkingBudget: 0 } }) }
-  };
-  let lastErr = 'unknown';
-  for (let a = 1; a <= 3; a++) {
-    try {
-      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if (res.status === 429 || res.status >= 500) {
-        lastErr = `Google busy (${res.status})`;
+      ...(noThink ? { thinkingConfig: { thinkingBudget: 0 } } : {}) }
+  });
+  // Some models (e.g. *-flash-lite) reject thinkingBudget -> INVALID_ARGUMENT.
+  // Then fall back to default reasoning once instead of failing the page.
+  const tries = deepThink ? [false] : [true, false];
+  let note = null;
+  for (let t = 0; t < tries.length; t++) {
+    const noThink = tries[t];
+    const body = mkBody(noThink);
+    let lastErr = 'unknown';
+    for (let a = 1; a <= 3; a++) {
+      try {
+        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        if (res.status === 429 || res.status >= 500) {
+          lastErr = `Google busy (${res.status})`;
+          await sleep(2000 * Math.pow(2, a - 1));
+          continue;
+        }
+        if (!res.ok) {
+          const txt = await res.text();
+          if (noThink && res.status === 400 && /thinking|invalid argument/i.test(txt)) {
+            note = `thinking toggle not supported by ${model} — retried with default reasoning (costs more)`;
+            lastErr = '__FALLBACK__';
+            break;
+          }
+          throw new Error(`Google error ${res.status}: ${txt.slice(0, 200)}`);
+        }
+        const j = await res.json();
+        let raw = (((j.candidates || [])[0] || {}).content || {}).parts || [];
+        raw = raw.map(p => p.text || '').join('');
+        const u = j.usageMetadata || {};
+        return { data: extractJson(raw), note,
+                 usage: { prompt: u.promptTokenCount || 0, candidates: u.candidatesTokenCount || 0 } };
+      } catch (e) {
+        lastErr = e.message;
+        if (/Google error 4/.test(e.message)) throw e; // bad key / bad request — retrying won't help
         await sleep(2000 * Math.pow(2, a - 1));
-        continue;
       }
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`Google error ${res.status}: ${t.slice(0, 200)}`);
-      }
-      const j = await res.json();
-      let raw = (((j.candidates || [])[0] || {}).content || {}).parts || [];
-      raw = raw.map(p => p.text || '').join('');
-      const u = j.usageMetadata || {};
-      return { data: extractJson(raw),
-               usage: { prompt: u.promptTokenCount || 0, candidates: u.candidatesTokenCount || 0 } };
-    } catch (e) {
-      lastErr = e.message;
-      if (/Google error 4/.test(e.message)) throw e; // bad key / bad request — retrying won't help
-      await sleep(2000 * Math.pow(2, a - 1));
     }
+    if (lastErr === '__FALLBACK__') continue; // retry same page with default reasoning
+    throw new Error('Gemini failed after 3 tries: ' + lastErr);
   }
-  throw new Error('Gemini failed after 3 tries: ' + lastErr);
+  throw new Error('Gemini failed: thinking fallback exhausted');
 }
 
 function extractJson(raw) {
