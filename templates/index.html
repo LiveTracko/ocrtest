@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voter Roll Extractor — Web</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <h1>Voter Roll Extractor <span class="sub">PDF → Excel (browser)</span></h1>
+  <p class="hint" id="health">Checking server…</p>
+
+  <div class="card">
+    <h2>1. Upload PDF</h2>
+    <input type="file" id="file" accept=".pdf">
+    <div class="row">
+      <label>From page <input id="fromPage" type="number" min="1" placeholder="blank = all"></label>
+      <label>To page <input id="toPage" type="number" min="1" placeholder="blank = all"></label>
+      <label class="chk"><input id="force" type="checkbox"> Force reprocess</label>
+      <label>Mode
+        <select id="mode">
+          <option value="normal">Start Processing</option>
+          <option value="dry-run">Dry Run (no AI cost)</option>
+          <option value="retry-failed">Retry Failed/Review</option>
+        </select>
+      </label>
+    </div>
+    <button id="uploadBtn" onclick="upload()">Upload + Start</button>
+    <span id="uploadMsg" class="msg"></span>
+  </div>
+
+  <div class="card">
+    <h2>2. Jobs <button class="small" onclick="loadJobs()">Refresh</button></h2>
+    <p class="hint">Shared workspace — everyone sees all jobs. Tick 2+ finished jobs to merge.</p>
+    <div id="jobs">Loading…</div>
+    <button id="mergeBtn" onclick="mergeJobs()">Merge selected into one Excel</button>
+    <span id="mergeMsg" class="msg"></span>
+  </div>
+
+  <div class="card">
+    <h2>3. Selected job</h2>
+    <div id="detail" class="hint">Click a job ID to watch progress + logs.</div>
+    <pre id="logs"></pre>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
