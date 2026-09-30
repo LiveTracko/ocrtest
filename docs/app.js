@@ -13,18 +13,31 @@ const EPIC_RE = /^[A-Z]{3}[0-9]{7}$/;
 const VALID_GENDERS = ["Male","Female","Other"];
 const VALID_RELATIONS = ["FATHER","MOTHER","HUSBAND","WIFE","OTHER"];
 
-const SYSTEM_RULES = `The image is the primary source of truth.
-OCR is supporting information only.
-Compare OCR with the image.
-If OCR is wrong, correct it using the image.
-Never guess.
-If a value is unreadable, return null and mark it for review.
-Never invent a voter.
-Never merge two voters.
-Never split one voter incorrectly.`;
+// Billed rates, USD per 1M tokens (Google AI Studio, 2026). Display only.
+const RATES = {
+  'gemini-3.8-flash': { in: 0.75, out: 3.75 },
+  'gemini-2.5-flash': { in: 0.30, out: 2.50 },
+  'gemini-2.5-flash-lite': { in: 0.10, out: 0.40 }
+};
+const USD_INR = 88; // approx display rate
+let runCostUSD = 0, runPaidCalls = 0;
+
+function renderCost() {
+  document.getElementById('cost').textContent =
+    `Cost this run: ₹${(runCostUSD * USD_INR).toFixed(2)} ($${runCostUSD.toFixed(4)}) • ${runPaidCalls} paid call(s)`;
+}
+
+function charge(model, usage, label) {
+  const r = RATES[model] || RATES['gemini-3.8-flash'];
+  const inp = usage.prompt || 0, out = usage.candidates || 0;
+  const usd = inp / 1e6 * r.in + out / 1e6 * r.out;
+  runCostUSD += usd; runPaidCalls++;
+  renderCost();
+  log(`${label}: tokens in=${inp} out=${out} • ₹${(usd * USD_INR).toFixed(2)}`);
+}
 
 function pagePrompt(pageNum, ocrText) {
-  return `You extract voter records from an Indian electoral-roll page scan.\n\n${SYSTEM_RULES}\n\nPage number: ${pageNum}\n\nSupporting OCR text (may contain errors — verify every field against the image):\n---\n${ocrText}\n---\n\nReturn STRUCTURED JSON ONLY, exactly this shape, no markdown fences, no commentary:\n{"page_number": ${pageNum}, "voters": [{"serial_number": 1, "epic_number": "ABC1234567", "name": "RAMESH KUMAR", "relation_type": "FATHER", "relation_name": "SURESH KUMAR", "house_number": "125", "age": 45, "gender": "Male", "confidence": "HIGH", "needs_review": false, "review_reason": null}]}\n\nRules:\n- relation_type must be one of FATHER, MOTHER, HUSBAND, WIFE, OTHER (or null if unreadable).\n- gender must be Male, Female or Other (or null if unreadable).\n- confidence is HIGH only if every field of that voter is clearly readable; MEDIUM if minor doubt; LOW if any field is doubtful (then set needs_review=true and explain in review_reason).\n- house_number and epic_number: copy EXACTLY as printed, do not "correct" spelling. Unreadable -> null + needs_review.\n- age must be an integer or null.\n- Do not drop records. Do not fabricate. Empty page -> {"page_number": N, "voters": []}.`;
+  return `Extract voter records from this Indian electoral-roll page scan. IMAGE is truth; OCR below is supporting only (correct it from image). Never guess/invent/merge/split voters; unreadable -> null + needs_review.\nPage: ${pageNum}\nOCR (may err):\n---\n${ocrText}\n---\nReturn JSON ONLY, no fences:\n{"page_number": ${pageNum}, "voters": [{"serial_number": 1, "epic_number": "ABC1234567", "name": "RAMESH KUMAR", "relation_type": "FATHER", "relation_name": "SURESH KUMAR", "house_number": "125", "age": 45, "gender": "Male", "confidence": "HIGH", "needs_review": false, "review_reason": null}]}\nrelation_type: FATHER/MOTHER/HUSBAND/WIFE/OTHER/null. gender: Male/Female/Other/null. confidence HIGH only if all fields clear; else MEDIUM/LOW + needs_review + review_reason. Copy EPIC/house_number EXACTLY. age integer/null. Empty page -> {"page_number": N, "voters": []}.`;
 }
 
 let running = false, stopAsked = false;
@@ -46,6 +59,42 @@ function progress() {
   const pct = totalCount ? Math.round(doneCount / totalCount * 100) : 0;
   document.getElementById('barFill').style.width = pct + '%';
   document.getElementById('status').textContent = `Progress ${doneCount}/${totalCount} pages • ${allVoters.length} voter rows • ${pageIssues.length} review notes`;
+  renderCost();
+}
+
+// ---------- page cache (same file+page+settings -> reuse, ₹0, identical data) ----------
+function cacheKey(job, pageNum, model, scale, useOcr) {
+  return [job.file.name, job.file.size, job.file.lastModified, pageNum, model, scale, useOcr ? 1 : 0].join('|');
+}
+function loadCache() { try { return JSON.parse(localStorage.getItem('vrCacheV1') || '{}'); } catch (e) { return {}; } }
+function readCached(key) { const c = loadCache(); return c[key] || null; }
+function writeCached(key, val) {
+  try {
+    const c = loadCache();
+    c[key] = { ...val, savedAt: Date.now() };
+    const keys = Object.keys(c);
+    if (keys.length > 300) {
+      keys.sort((a, b) => (c[a].savedAt || 0) - (c[b].savedAt || 0));
+      for (const k of keys.slice(0, keys.length - 300)) delete c[k];
+    }
+    localStorage.setItem('vrCacheV1', JSON.stringify(c));
+  } catch (e) { try { localStorage.removeItem('vrCacheV1'); } catch (e2) {} }
+}
+
+// ---------- blank-page check (white page + no OCR text -> skip paid call) ----------
+function darkFraction(canvas) {
+  const w = canvas.width, h = canvas.height;
+  const stepX = Math.max(1, Math.floor(w / 200)), stepY = Math.max(1, Math.floor(h / 200));
+  const tiny = document.createElement('canvas');
+  tiny.width = Math.ceil(w / stepX); tiny.height = Math.ceil(h / stepY);
+  tiny.getContext('2d').drawImage(canvas, 0, 0, tiny.width, tiny.height);
+  const d = tiny.getContext('2d').getImageData(0, 0, tiny.width, tiny.height).data;
+  let dark = 0, n = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    n++;
+    if ((d[i] + d[i + 1] + d[i + 2]) / 3 < 128) dark++;
+  }
+  return n ? dark / n : 0;
 }
 
 // ---------- API key ----------
@@ -78,6 +127,7 @@ async function start() {
   if (fromP && toP && fromP > toP) { alert('From page cannot be greater than To page.'); return; }
 
   running = true; stopAsked = false;
+  runCostUSD = 0; runPaidCalls = 0; renderCost();
   document.getElementById('startBtn').disabled = true;
   document.getElementById('stopBtn').disabled = false;
   document.getElementById('upMsg').textContent = 'Processing… do not close this tab.';
@@ -111,7 +161,7 @@ async function start() {
       if (stopAsked) break;
     }
     document.getElementById('upMsg').textContent =
-      `Finished: ${allVoters.length} rows, ${pageIssues.length} review notes. Download your Excel below.`;
+      `Finished: ${allVoters.length} rows, ${pageIssues.length} review notes. Cost this run: ₹${(runCostUSD * USD_INR).toFixed(2)} (${runPaidCalls} paid calls). Download your Excel below.`;
     log(`Done. ${allVoters.length} rows. Download voters.xlsx now.`);
   } catch (e) {
     document.getElementById('upMsg').textContent = 'Error: ' + e.message;
@@ -126,6 +176,15 @@ function stop() { stopAsked = true; }
 
 async function processPage(job, pageNum, key, model, scale, useOcr) {
   const label = `${job.file.name} p.${pageNum}`;
+  const ck = cacheKey(job, pageNum, model, scale, useOcr);
+  const hit = readCached(ck);
+  if (hit) {
+    log(`${label}: cache hit — reused stored rows, ₹0`);
+    for (const r of hit.voters) allVoters.push({ ...r, _page: pageNum, _source: job.file.name });
+    for (const i of hit.issues) pageIssues.push({ page: pageNum, source: job.file.name, issue: i, status: 'REVIEW' });
+    if (hit.failed) pageIssues.push({ page: pageNum, source: job.file.name, issue: hit.failed, status: 'FAILED' });
+    return;
+  }
   log(`${label}: render…`);
   try {
     const page = await job.pdf.getPage(pageNum);
@@ -134,6 +193,7 @@ async function processPage(job, pageNum, key, model, scale, useOcr) {
     canvas.width = viewport.width; canvas.height = viewport.height;
     await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
 
+    const dark = darkFraction(canvas);
     let ocrText = '';
     if (useOcr) {
       log(`${label}: OCR…`);
@@ -143,14 +203,25 @@ async function processPage(job, pageNum, key, model, scale, useOcr) {
       } catch (e) { log(`${label}: OCR skipped (${e.message})`); }
     }
 
+    if (dark < 0.0003 && ocrText.trim().length < 20) {
+      const note = 'blank page (no text found) — paid call skipped, verify visually';
+      pageIssues.push({ page: pageNum, source: job.file.name, issue: note, status: 'REVIEW' });
+      writeCached(ck, { voters: [], issues: [note], failed: null });
+      log(`${label}: blank — paid call skipped, ₹0 (flagged for review)`);
+      canvas.width = canvas.height = 0; // free memory
+      return;
+    }
+
     const jpg = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
     canvas.width = canvas.height = 0; // free memory
     log(`${label}: Gemini…`);
-    const data = await callGemini(key, model, pageNum, ocrText, jpg);
+    const { data, usage } = await callGemini(key, model, pageNum, ocrText, jpg);
+    charge(model, usage, label);
     const rows = validateRows(data, pageNum);
     for (const r of rows.voters) allVoters.push({ ...r, _page: pageNum, _source: job.file.name });
     for (const i of rows.issues) pageIssues.push({ page: pageNum, source: job.file.name, issue: i, status: 'REVIEW' });
     if (rows.failed) pageIssues.push({ page: pageNum, source: job.file.name, issue: rows.failed, status: 'FAILED' });
+    writeCached(ck, { voters: rows.voters, issues: rows.issues, failed: rows.failed });
     log(`${label}: ${rows.voters.length} rows (${rows.voters.filter(v => v.needs_review).length} review)`);
   } catch (e) {
     pageIssues.push({ page: pageNum, source: job.file.name, issue: 'page failed: ' + e.message, status: 'FAILED' });
@@ -181,7 +252,9 @@ async function callGemini(key, model, pageNum, ocrText, b64) {
       const j = await res.json();
       let raw = (((j.candidates || [])[0] || {}).content || {}).parts || [];
       raw = raw.map(p => p.text || '').join('');
-      return extractJson(raw);
+      const u = j.usageMetadata || {};
+      return { data: extractJson(raw),
+               usage: { prompt: u.promptTokenCount || 0, candidates: u.candidatesTokenCount || 0 } };
     } catch (e) {
       lastErr = e.message;
       if (/Google error 4/.test(e.message)) throw e; // bad key / bad request — retrying won't help
@@ -282,6 +355,7 @@ function downloadExcel(kind) {
 function clearAll() {
   if (!confirm('Clear all results in this browser? (Downloaded Excels are safe.)')) return;
   allVoters = []; pageIssues = []; doneCount = 0; totalCount = 0;
+  runCostUSD = 0; runPaidCalls = 0; renderCost();
   document.getElementById('preview').innerHTML = '';
   document.getElementById('logs').textContent = '';
   document.getElementById('barFill').style.width = '0%';
