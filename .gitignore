@@ -19,8 +19,6 @@ review/*
 state/*
 logs/*
 output/*
-jobs/*
-!jobs/.gitkeep
 
 # Keep folder placeholders in git, ignore contents
 !pages/.gitkeep
