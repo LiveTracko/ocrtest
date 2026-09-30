@@ -18,6 +18,7 @@ Pipeline code is reused unchanged via job_runner.py.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -36,9 +37,12 @@ BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(title="Voter Roll Extractor — Web")
 
-# Background pool: 2 concurrent PDFs max. Rest stay "queued".
-# (Gemini rate-limits + Render free tier has ~512MB RAM.)
-_executor = ThreadPoolExecutor(max_workers=2)
+# Background pool: how many PDFs process at once. Rest stay "queued".
+# Default 1 — Render's free tier has ~512MB RAM and PaddleOCR + OpenCV +
+# Gemini on a 300-DPI page can spike past that with 2 workers (OOM restart
+# wipes the temp jobs disk). Set MAX_WORKERS=2 on Starter plan or bigger.
+# (Also protects the Gemini per-minute quota with 5+ users.)
+_executor = ThreadPoolExecutor(max_workers=max(1, int(os.getenv("MAX_WORKERS", "1"))))
 
 # Serve frontend assets
 _static = BASE_DIR / "static"

@@ -16,3 +16,5 @@ services:
         value: 3
       - key: ENABLE_SECOND_VERIFICATION
         value: true
+      - key: MAX_WORKERS
+        value: 1

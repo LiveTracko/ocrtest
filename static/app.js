@@ -1,14 +1,47 @@
 let selected = null;
 let pollTimer = null;
+let failCount = 0;
+
+// All API calls go through here. Render's free tier returns its own HTML
+// "waking/deploying" pages during restarts — never let that surface as a
+// raw "Unexpected token '<'" SyntaxError. Show a human message + retry.
+async function apiJson(url, opts) {
+  let res;
+  try {
+    res = await fetch(url, opts);
+  } catch (e) {
+    throw new Error('cannot reach server (it may be waking up — free plan sleeps). Retrying…');
+  }
+  const ctype = res.headers.get('content-type') || '';
+  if (!ctype.includes('application/json')) {
+    throw new Error('server is restarting/waking (got a loading page, not data). Retrying…');
+  }
+  let j;
+  try {
+    j = await res.json();
+  } catch (e) {
+    throw new Error('server returned an empty reply (restarting?). Retrying…');
+  }
+  if (!res.ok) {
+    throw new Error(j.detail || ('request failed (' + res.status + ')'));
+  }
+  return j;
+}
+
+function noteFail(box, e) {
+  failCount++;
+  box.innerHTML = '<p class="hint">⏳ ' + escapeHtml(e.message) +
+    ' Auto-retries every 10s — or press Refresh. ' +
+    '(Free plan sleeps after 15 min idle; first load can take ~1 min.)</p>';
+}
 
 async function health() {
   try {
-    const r = await fetch('/api/health');
-    const j = await r.json();
+    const j = await apiJson('/api/health');
     document.getElementById('health').textContent =
       `Server OK • model=${j.model} • key=${j.key_set ? 'set' : 'MISSING — set GEMINI_API_KEY on Render'} • DPI=${j.dpi}`;
   } catch (e) {
-    document.getElementById('health').textContent = 'Server unreachable.';
+    document.getElementById('health').textContent = 'Server waking… refresh in a minute.';
   }
 }
 
@@ -16,7 +49,7 @@ async function upload() {
   const f = document.getElementById('file').files[0];
   const msg = document.getElementById('uploadMsg');
   if (!f) { msg.textContent = 'Pick a PDF first.'; return; }
-  msg.textContent = 'Uploading…';
+  msg.textContent = 'Uploading… (big PDFs take a while — do not close the tab)';
   const fd = new FormData();
   fd.append('file', f);
   fd.append('from_page', document.getElementById('fromPage').value || '');
@@ -24,23 +57,21 @@ async function upload() {
   fd.append('force', document.getElementById('force').checked ? 'true' : 'false');
   fd.append('mode', document.getElementById('mode').value);
   try {
-    const r = await fetch('/api/jobs', { method: 'POST', body: fd });
-    const j = await r.json();
-    if (!r.ok) { msg.textContent = 'Error: ' + (j.detail || r.status); return; }
-    msg.textContent = 'Job started: ' + j.job_id;
+    const j = await apiJson('/api/jobs', { method: 'POST', body: fd });
+    msg.textContent = 'Job started: ' + j.job_id + ' — watch progress below.';
     selected = j.job_id;
     loadJobs();
     watchJob(j.job_id);
   } catch (e) {
-    msg.textContent = 'Upload failed: ' + e;
+    msg.textContent = 'Upload issue: ' + e.message;
   }
 }
 
 async function loadJobs() {
   const box = document.getElementById('jobs');
   try {
-    const r = await fetch('/api/jobs');
-    const j = await r.json();
+    const j = await apiJson('/api/jobs');
+    failCount = 0;
     if (!j.jobs.length) { box.innerHTML = '<p class="hint">No jobs yet — upload a PDF.</p>'; return; }
     let h = '<table><tr><th></th><th>Job</th><th>File</th><th>Status</th><th>Progress</th><th>Records</th><th>Download</th></tr>';
     for (const job of j.jobs) {
@@ -61,7 +92,7 @@ async function loadJobs() {
     }
     box.innerHTML = h + '</table>';
   } catch (e) {
-    box.textContent = 'Failed to load jobs: ' + e;
+    noteFail(box, e);
   }
 }
 
@@ -69,14 +100,13 @@ async function watchJob(id) {
   selected = id;
   if (pollTimer) clearInterval(pollTimer);
   await refreshDetail();
-  pollTimer = setInterval(refreshDetail, 2500);
+  pollTimer = setInterval(refreshDetail, 4000);
 }
 
 async function refreshDetail() {
   if (!selected) return;
   try {
-    const r = await fetch('/api/jobs/' + selected);
-    const j = await r.json();
+    const j = await apiJson('/api/jobs/' + selected);
     const done = (j.done_pages || []).length;
     const total = (j.pages && j.pages.length) || j.total_pages || 0;
     document.getElementById('detail').innerHTML =
@@ -86,10 +116,23 @@ async function refreshDetail() {
       `<a class="dl" href="/api/jobs/${selected}/download?kind=voters">Excel</a>` +
       `<a class="dl" href="/api/jobs/${selected}/download?kind=review">Review</a>` +
       (j.error ? `<br>Error: ${escapeHtml(j.error)}` : '');
-    const l = await (await fetch(`/api/jobs/${selected}/logs?tail=120`)).json();
+    const l = await apiJson(`/api/jobs/${selected}/logs?tail=120`);
     document.getElementById('logs').textContent = (l.logs || []).join('\n');
     if (j.status === 'done' || j.status === 'failed') { clearInterval(pollTimer); loadJobs(); }
-  } catch (e) { /* keep polling */ }
+  } catch (e) {
+    // Job may vanish if the free server restarted (disk is temporary).
+    // Keep polling a few times, then stop with a clear message.
+    failCount++;
+    if (failCount > 8) {
+      clearInterval(pollTimer);
+      document.getElementById('detail').innerHTML =
+        '⚠ Lost contact with this job — the free server likely restarted (its disk is temporary, jobs vanish). ' +
+        'Please re-upload the PDF. Tip: process small page ranges and download the Excel the same day.';
+      document.getElementById('logs').textContent = '';
+    } else {
+      document.getElementById('detail').innerHTML = '⏳ ' + escapeHtml(e.message);
+    }
+  }
 }
 
 async function mergeJobs() {
@@ -98,16 +141,14 @@ async function mergeJobs() {
   if (ids.length < 2) { msg.textContent = 'Tick at least 2 jobs.'; return; }
   msg.textContent = 'Merging…';
   try {
-    const r = await fetch('/api/merge', {
+    const j = await apiJson('/api/merge', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(ids)
     });
-    const j = await r.json();
-    if (!r.ok) { msg.textContent = 'Merge error: ' + (j.detail || r.status); return; }
     msg.innerHTML = `Merged ${j.total_rows} rows → <a href="/api/jobs/${j.merge_job_id}/download?kind=voters">Download merged Excel</a>`;
     loadJobs();
   } catch (e) {
-    msg.textContent = 'Merge failed: ' + e;
+    msg.textContent = 'Merge issue: ' + e.message;
   }
 }
 
