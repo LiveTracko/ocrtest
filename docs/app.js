@@ -186,8 +186,10 @@ function progress() {
   const pct = totalCount ? Math.round(doneCount / totalCount * 100) : 0;
   const bar = document.getElementById('barFill');
   if (bar) bar.style.width = pct + '%';
+  const pctEl = document.getElementById('barPct');
+  if (pctEl) pctEl.textContent = pct + '%';
   const st = document.getElementById('status');
-  if (st) st.textContent = `Progress ${doneCount}/${totalCount} pages • ${allVoters.length} voter rows • ${pageIssues.length} review notes` + (bgHidden ? ' • background mode' : '');
+  if (st) st.textContent = `Progress ${doneCount}/${totalCount} pages (${pct}%) • ${allVoters.length} voter rows • ${pageIssues.length} review notes` + (bgHidden ? ' • background mode' : '');
   renderCost();
 }
 
@@ -336,9 +338,10 @@ async function start() {
     if (bgDeferredPreview) { bgDeferredPreview = false; try { renderPreview(); } catch (e) {} }
     if (bgDeferredPages) { bgDeferredPages = false; try { renderPages(); } catch (e) {} }
     progress();
+    const finalPct = totalCount ? Math.round(doneCount / totalCount * 100) : 100;
     document.getElementById('upMsg').textContent =
-      `Finished: ${allVoters.length} rows, ${pageIssues.length} review notes. Cost this run: ₹${(runCostUSD * USD_INR).toFixed(2)} (≈ ₹${(runCostUSD * USD_INR * (1 + GST_RATE)).toFixed(2)} incl. GST, ${runPaidCalls} paid calls). Download your Excel below.`;
-    log(`Done. ${allVoters.length} rows. Download voters.xlsx now.`);
+      `Finished: ${doneCount}/${totalCount} pages (${finalPct}%) • ${allVoters.length} rows, ${pageIssues.length} review notes. Cost this run: ₹${(runCostUSD * USD_INR).toFixed(2)} (≈ ₹${(runCostUSD * USD_INR * (1 + GST_RATE)).toFixed(2)} incl. GST, ${runPaidCalls} paid calls). Download your Excel below.`;
+    log(`Done ${doneCount}/${totalCount} pages (${finalPct}%). ${allVoters.length} rows. Download voters.xlsx now.`);
   } catch (e) {
     document.getElementById('upMsg').textContent = 'Error: ' + e.message;
     log('ERROR: ' + e.message);
@@ -598,5 +601,7 @@ function clearAll() {
   renderPages();
   document.getElementById('logs').textContent = '';
   document.getElementById('barFill').style.width = '0%';
-  document.getElementById('status').textContent = 'Cleared.';
+  const pctEl = document.getElementById('barPct');
+  if (pctEl) pctEl.textContent = '0%';
+  document.getElementById('status').textContent = 'Cleared. (0%)';
 }

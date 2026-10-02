@@ -155,6 +155,8 @@ class UploadApp(tk.Tk):
         self.worker: threading.Thread | None = None
         self.log_queue: queue.Queue[str] = queue.Queue()
         self._closing = False
+        self._target_pages: list[int] = []
+        self.pct_var: tk.StringVar | None = None
 
         self._build_widgets()
         self._refresh_merge_state()
@@ -261,9 +263,17 @@ class UploadApp(tk.Tk):
         ttk.Label(main, textvariable=self.status_var,
                   foreground="#0a58ca").pack(anchor="w", pady=(6, 4))
 
-        # Progress + log
-        self.progress = ttk.Progressbar(main, mode="indeterminate")
-        self.progress.pack(fill=tk.X, pady=(0, 6))
+        # Progress bar + percentage + log
+        prog_row = ttk.Frame(main)
+        prog_row.pack(fill=tk.X, pady=(0, 6))
+        self.progress = ttk.Progressbar(prog_row, mode="determinate",
+                                        maximum=100, value=0)
+        self.progress.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.pct_var = tk.StringVar(value="0%")
+        self.pct_label = ttk.Label(prog_row, textvariable=self.pct_var,
+                                   width=6, anchor="e",
+                                   font=("Segoe UI", 10, "bold"))
+        self.pct_label.pack(side=tk.LEFT, padx=(8, 0))
 
         log_frame = ttk.LabelFrame(main, text="Progress / Log", padding=6)
         log_frame.pack(fill=tk.BOTH, expand=True)
@@ -290,6 +300,83 @@ class UploadApp(tk.Tk):
             pass
         self.after(100, self._poll_log_queue)
 
+    # ------------------------------------------------------- progress %
+    def _progress_set(self, done: int, total: int) -> None:
+        """Update determinate bar + '42%' label + status line (UI thread only)."""
+        try:
+            from utils import calc_progress_pct
+            pct = calc_progress_pct(done, total)
+        except Exception:
+            pct = 0
+        try:
+            self.progress.configure(maximum=100, value=pct)
+        except tk.TclError:
+            pass
+        try:
+            if self.pct_var is not None:
+                self.pct_var.set(f"{pct}%")
+        except tk.TclError:
+            pass
+        if total > 0:
+            self.status_var.set(
+                f"Processing {done}/{total} pages ({pct}%)… (see log below)")
+
+    def _progress_begin(self, total: int) -> None:
+        try:
+            self.progress.configure(maximum=100, value=0)
+        except tk.TclError:
+            pass
+        try:
+            if self.pct_var is not None:
+                self.pct_var.set("0%")
+        except tk.TclError:
+            pass
+
+    def _progress_finish(self, done: int, total: int) -> None:
+        self._progress_set(done, total)
+
+    def _resolve_target_pages(self, argv: list[str]) -> list[int]:
+        """Best-effort target page list for the % bar (never raises)."""
+        try:
+            import utils
+            import pdf_processor
+            total = self.total_pages
+            if total is None and self.pdf_path is not None:
+                try:
+                    total = pdf_processor.get_total_pages(self.pdf_path)
+                    self.total_pages = total
+                except Exception:
+                    total = None
+            if "--pages" in argv:
+                spec = argv[argv.index("--pages") + 1]
+                if total:
+                    return utils.parse_pages_arg(spec, total)
+                # total unknown: expand simple specs manually
+                if "-" in spec:
+                    a, b = spec.split("-", 1)
+                    return list(range(int(a), int(b) + 1))
+                if "," in spec:
+                    return sorted({int(x) for x in spec.split(",") if x.strip()})
+                return [int(spec)]
+            if total:
+                if "--retry-failed" in argv:
+                    try:
+                        import checkpoint
+                        todo = []
+                        for p in range(1, total + 1):
+                            c = checkpoint.load_page_result(
+                                SETTINGS.results_dir, p)
+                            if not c or c.get("status") in (
+                                    "FAILED", "REVIEW_REQUIRED"):
+                                todo.append(p)
+                        return todo or list(range(1, total + 1))
+                    except Exception:
+                        pass
+                return list(range(1, total + 1))
+        except Exception:
+            pass
+        return []
+
     def _set_busy(self, busy: bool) -> None:
         state = tk.DISABLED if busy else tk.NORMAL
         self.upload_btn.configure(state=state)
@@ -301,9 +388,11 @@ class UploadApp(tk.Tk):
             self.merge_btn.configure(state=tk.DISABLED)
             self.download_btn.configure(state=tk.DISABLED)
             self.clear_btn.configure(state=tk.DISABLED)
-            self.progress.start(12)
         else:
-            self.progress.stop()
+            try:
+                self.progress.stop()
+            except tk.TclError:
+                pass
             self._refresh_merge_state()
             self._refresh_output_buttons()
 
@@ -433,6 +522,8 @@ class UploadApp(tk.Tk):
         self.status_var.set("PDF ready — set From/To pages (blank = all), then Start.")
         self.log(f"[UPLOAD] {self.pdf_path}{pages_info}")
         self._set_busy(False)
+        self._progress_begin(self.total_pages or 0)
+        # keep bar at 0% until Start is pressed
         self.start_btn.configure(state=tk.NORMAL)
         self.dry_btn.configure(state=tk.NORMAL)
         self.retry_btn.configure(state=tk.NORMAL)
@@ -476,14 +567,47 @@ class UploadApp(tk.Tk):
         if self.worker and self.worker.is_alive():
             messagebox.showwarning("Busy", "Processing is already running.")
             return
+        self._target_pages = self._resolve_target_pages(argv)
+        total_n = len(self._target_pages)
         self._set_busy(True)
-        self.status_var.set(f"{label}… (see log below)")
+        self._progress_begin(total_n)
+        if total_n:
+            self.status_var.set(f"{label} 0/{total_n} pages (0%)… (see log below)")
+        else:
+            self.status_var.set(f"{label}… (see log below)")
         self.log(f"[RUN] python main.py {' '.join(argv)}")
 
         def _target() -> None:
             try:
                 import main as pipeline  # existing flow, untouched
-                rc = pipeline.main(argv)
+                # Wrap per-page worker so the determinate bar + % label move
+                # in real time (cached pages count too — they are done work).
+                _orig_process = pipeline.process_page
+                _done = [0]
+                _total = [total_n or 0]
+
+                def _counting_process(page_number, input_pdf, force=False):
+                    try:
+                        return _orig_process(page_number, input_pdf, force=force)
+                    finally:
+                        _done[0] += 1
+                        d, t = _done[0], _total[0]
+                        try:
+                            from utils import calc_progress_pct as _pct
+                            pct = _pct(d, t)
+                        except Exception:
+                            pct = 0
+                        self.log(f"[PROGRESS] {d}/{t} ({pct}%) — page {page_number} done")
+                        self.after(0, lambda dd=d, tt=t: self._progress_set(dd, tt))
+
+                pipeline.process_page = _counting_process  # type: ignore[method-assign]
+                try:
+                    rc = pipeline.main(argv)
+                finally:
+                    pipeline.process_page = _orig_process  # type: ignore[method-assign]
+                # Ensure bar ends at 100% on clean finish with known total.
+                if rc == 0 and _total[0]:
+                    self.after(0, lambda: self._progress_finish(_total[0], _total[0]))
                 self.log(f"[DONE] exit code={rc}. Output: {SETTINGS.output_dir}")
                 if rc == 0 and snapshot:
                     try:
@@ -557,17 +681,20 @@ class UploadApp(tk.Tk):
                                 f"Currently snapshotted: {len(snaps)}.")
             return
         self._set_busy(True)
-        self.status_var.set("Merging…")
+        self._progress_begin(100)
+        self._progress_set(50, 100)
+        self.status_var.set("Merging… (50%)")
         self.log(f"[MERGE] {len(snaps)} files: {', '.join(p.name for p in snaps)}")
 
         def _target() -> None:
             try:
                 total, per = self._do_merge(snaps)
-                self.log(f"[MERGE DONE] {per} → total {total} rows. "
+                self.log(f"[MERGE DONE] {per} → total {total} rows (100%). "
                          f"Wrote {SETTINGS.output_dir / MERGED_VOTERS_NAME}")
+                self.after(0, lambda: self._progress_set(100, 100))
                 self._backup_excels_to_downloads("merged")
                 self.status_var.set(
-                    f"Merged {len(snaps)} PDFs = {total} rows → {MERGED_VOTERS_NAME}")
+                    f"Merged {len(snaps)} PDFs = {total} rows (100%) → {MERGED_VOTERS_NAME}")
                 self.after(0, lambda: messagebox.showinfo(
                     "Merge done",
                     f"Merged {len(snaps)} PDFs.\nRows per PDF: {per}\nTotal rows: {total}\n\n"

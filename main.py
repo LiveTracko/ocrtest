@@ -523,8 +523,15 @@ def main(argv: list[str] | None = None) -> int:
     done_pages: list[int] = []
     try:
         for i, p in enumerate(pages, 1):
-            log.info("Progress %d/%d — page %d", i, len(pages), p)
+            pct = utils.calc_progress_pct(i - 1, len(pages))
+            log.info("Progress %s — page %d", utils.format_progress(i - 1, len(pages)), p)
+            print(f"[PROGRESS] {i - 1}/{len(pages)} ({pct}%) — starting page {p}", flush=True)
             process_page(p, input_pdf, force=force)  # never raises; failures continue
+            done_pct = utils.calc_progress_pct(len(done_pages) + 1, len(pages))
+            log.info("Progress %s — finished page %d",
+                     utils.format_progress(len(done_pages) + 1, len(pages)), p)
+            print(f"[PROGRESS] {len(done_pages) + 1}/{len(pages)} ({done_pct}%) — finished page {p}",
+                  flush=True)
             done_pages.append(p)
             # Belt-and-suspenders: process_page already saves interim Excel,
             # but re-save here in case it was skipped (e.g. cached page).

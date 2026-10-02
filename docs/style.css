@@ -13,8 +13,9 @@ button.small { padding: 4px 10px; font-size: 12px; }
 button.danger { background: #b91c1c; }
 button:disabled { background: #999; }
 .msg { margin-left: 10px; font-size: 13px; }
-.bar { height: 10px; background: #e5e7eb; border-radius: 6px; overflow: hidden; margin: 8px 0; }
-#barFill { height: 100%; width: 0%; background: #15803d; transition: width .3s; }
+.bar { height: 20px; background: #e5e7eb; border-radius: 6px; overflow: hidden; margin: 8px 0; position: relative; }
+#barFill { height: 100%; width: 0%; background: #15803d; transition: width .3s; display: flex; align-items: center; justify-content: center; min-width: 36px; }
+#barPct { color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; white-space: nowrap; }
 pre { background: #0b1020; color: #c8e6c9; padding: 12px; border-radius: 8px; max-height: 300px; overflow: auto; font-size: 12px; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th, td { border-bottom: 1px solid #eee; padding: 5px 6px; text-align: left; }
