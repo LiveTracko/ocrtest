@@ -48,20 +48,146 @@ let allVoters = [];   // {row..., _page, _source}
 let pageIssues = [];  // {page, source, issue, status}
 let doneCount = 0, totalCount = 0;
 
+// ---------- background-resilient harness (same High/Full quality, no throttle) ----------
+// Browsers throttle background tabs: setTimeout clamped, rAF stopped, canvas/GPU
+// deprioritised. Gemini fetch (network) is mostly unaffected — the slowdown comes
+// from main-thread work: sync toDataURL, full-res OCR, full table re-render every
+// page. This harness keeps the Gemini image identical (High/Full untouched) while
+// moving supporting work off the throttled path.
+let bgHidden = (typeof document !== 'undefined' && document.hidden) || false;
+let bgDeferredPreview = false;
+let bgDeferredPages = false;
+let bgWakeLock = null;
+let bgTimerWorker = null;
+
+try {
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      const was = bgHidden;
+      bgHidden = document.hidden;
+      if (was && !bgHidden) {
+        // Back to foreground: flush deferred heavy DOM once.
+        if (bgDeferredPreview) { bgDeferredPreview = false; try { renderPreview(); } catch (e) {} }
+        if (bgDeferredPages) { bgDeferredPages = false; try { renderPages(); } catch (e) {} }
+        try { progress(); } catch (e) {}
+        log('Tab visible again — preview refreshed (background work continued at same quality).');
+      } else if (!was && bgHidden) {
+        log('Background detected — background-resilient mode ON (same High/Full image to Gemini, OCR/DOM de-throttled). Keep this tab open.');
+      }
+    });
+    // Don't lose last pages' cache if tab is closed right after a page finishes.
+    try {
+      window.addEventListener('pagehide', () => { try { flushCached(); } catch (e) {} });
+      window.addEventListener('beforeunload', () => { try { flushCached(); } catch (e) {} });
+    } catch (e2) {}
+  }
+} catch (e) {}
+
+function bgTimerWorkerEnsure() {
+  if (bgTimerWorker) return bgTimerWorker;
+  try {
+    const src = "onmessage=function(e){var id=e.data.id,ms=e.data.ms;setTimeout(function(){postMessage({id:id});},ms);};";
+    bgTimerWorker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+  } catch (e) { bgTimerWorker = null; }
+  return bgTimerWorker;
+}
+
+async function bgWakeRequest() {
+  try {
+    if (typeof navigator !== 'undefined' && 'wakeLock' in navigator && navigator.wakeLock && navigator.wakeLock.request) {
+      try { if (bgWakeLock && bgWakeLock.release) await bgWakeLock.release(); } catch (e) {}
+      bgWakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (e) { bgWakeLock = null; }
+}
+async function bgWakeRelease() {
+  try { if (bgWakeLock && bgWakeLock.release) await bgWakeLock.release(); } catch (e) {}
+  bgWakeLock = null;
+}
+
 // ---------- helpers ----------
 function log(m) {
   const el = document.getElementById('logs');
+  if (!el) return;
   el.textContent += new Date().toLocaleTimeString() + ' | ' + m + '\n';
-  el.scrollTop = el.scrollHeight;
+  // scrollTop forces layout; skip while hidden (big win as log grows).
+  if (!bgHidden) el.scrollTop = el.scrollHeight;
+  // Cap log size so background runs don't grow DOM forever.
+  if (el.textContent.length > 400000) {
+    el.textContent = el.textContent.slice(-300000);
+  }
 }
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function sleep(ms) {
+  // Worker-based timer resists background clamping; fallback to setTimeout.
+  const w = bgTimerWorkerEnsure();
+  if (!w) return new Promise(r => setTimeout(r, ms));
+  return new Promise((resolve) => {
+    let settled = false;
+    const id = Math.random().toString(36).slice(2);
+    const safety = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { w.removeEventListener('message', done); } catch (e2) {}
+      resolve();
+    }, ms + 5000);
+    const done = (e) => {
+      if (settled) return;
+      if (e.data && e.data.id === id) {
+        settled = true;
+        clearTimeout(safety);
+        w.removeEventListener('message', done);
+        resolve();
+      }
+    };
+    w.addEventListener('message', done);
+    try { w.postMessage({ id, ms }); }
+    catch (e) { if (!settled) { settled = true; clearTimeout(safety); w.removeEventListener('message', done); setTimeout(resolve, ms); } }
+  });
+}
+// Async JPEG: toBlob is off-main-thread, toDataURL blocks on Huge High canvas.
+function canvasToB64(canvas, quality) {
+  return new Promise((resolve, reject) => {
+    try {
+      if (canvas.toBlob) {
+        canvas.toBlob((blob) => {
+          if (!blob) { reject(new Error('toBlob failed')); return; }
+          const fr = new FileReader();
+          fr.onload = () => {
+            try {
+              const s = String(fr.result || '');
+              resolve(s.split(',')[1] || '');
+            } catch (e) { reject(e); }
+          };
+          fr.onerror = () => reject(fr.error || new Error('read blob failed'));
+          fr.readAsDataURL(blob);
+        }, 'image/jpeg', quality);
+      } else {
+        resolve(canvas.toDataURL('image/jpeg', quality).split(',')[1]);
+      }
+    } catch (e) { reject(e); }
+  });
+}
+// OCR is supporting-only (image is truth). Run it on a small copy so background
+// CPU contention doesn't slow the page; Gemini still gets the full High image.
+function downscaleForOcr(src) {
+  const MAX_W = 1200;
+  const w = src.width || 0, h = src.height || 0;
+  if (!w || !h || w <= MAX_W) return src;
+  const r = MAX_W / w;
+  const c = document.createElement('canvas');
+  c.width = MAX_W; c.height = Math.max(1, Math.round(h * r));
+  c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+  return c;
+}
 function progress() {
   const pct = totalCount ? Math.round(doneCount / totalCount * 100) : 0;
-  document.getElementById('barFill').style.width = pct + '%';
-  document.getElementById('status').textContent = `Progress ${doneCount}/${totalCount} pages • ${allVoters.length} voter rows • ${pageIssues.length} review notes`;
+  const bar = document.getElementById('barFill');
+  if (bar) bar.style.width = pct + '%';
+  const st = document.getElementById('status');
+  if (st) st.textContent = `Progress ${doneCount}/${totalCount} pages • ${allVoters.length} voter rows • ${pageIssues.length} review notes` + (bgHidden ? ' • background mode' : '');
   renderCost();
 }
 
@@ -72,16 +198,45 @@ function cacheKey(job, pageNum, model, scale, useOcr, thinkLevel) {
 function loadCache() { try { return JSON.parse(localStorage.getItem('vrCacheV1') || '{}'); } catch (e) { return {}; } }
 function readCached(key) { const c = loadCache(); return c[key] || null; }
 function writeCached(key, val) {
+  // Coalesced + deferred so huge High-res runs don't block next page on main
+  // thread (worse when backgrounded). Data is still flushed within ~2s and on
+  // finish/stop; cache hit content is unchanged.
   try {
+    writeCached._q = writeCached._q || {};
+    writeCached._q[key] = { ...val, savedAt: Date.now() };
+    if (writeCached._t) return;
+    writeCached._t = setTimeout(() => {
+      writeCached._t = null;
+      const q = writeCached._q || {};
+      writeCached._q = {};
+      try {
+        const c = loadCache();
+        for (const k of Object.keys(q)) c[k] = q[k];
+        const keys = Object.keys(c);
+        if (keys.length > 300) {
+          keys.sort((a, b) => (c[a].savedAt || 0) - (c[b].savedAt || 0));
+          for (const k of keys.slice(0, keys.length - 300)) delete c[k];
+        }
+        localStorage.setItem('vrCacheV1', JSON.stringify(c));
+      } catch (e) { try { localStorage.removeItem('vrCacheV1'); } catch (e2) {} }
+    }, 1500);
+  } catch (e) {}
+}
+function flushCached() {
+  try {
+    if (writeCached._t) { clearTimeout(writeCached._t); writeCached._t = null; }
+    const q = writeCached._q || {};
+    writeCached._q = {};
+    if (!Object.keys(q).length) return;
     const c = loadCache();
-    c[key] = { ...val, savedAt: Date.now() };
+    for (const k of Object.keys(q)) c[k] = q[k];
     const keys = Object.keys(c);
     if (keys.length > 300) {
       keys.sort((a, b) => (c[a].savedAt || 0) - (c[b].savedAt || 0));
       for (const k of keys.slice(0, keys.length - 300)) delete c[k];
     }
     localStorage.setItem('vrCacheV1', JSON.stringify(c));
-  } catch (e) { try { localStorage.removeItem('vrCacheV1'); } catch (e2) {} }
+  } catch (e) {}
 }
 
 // ---------- blank-page check (white page + no OCR text -> skip paid call) ----------
@@ -133,7 +288,11 @@ async function start() {
   runCostUSD = 0; runPaidCalls = 0; renderCost();
   document.getElementById('startBtn').disabled = true;
   document.getElementById('stopBtn').disabled = false;
-  document.getElementById('upMsg').textContent = 'Processing… do not close this tab.';
+  document.getElementById('upMsg').textContent = 'Processing… do not close this tab. Background mode is resilient — same quality in background.';
+  bgTimerWorkerEnsure();
+  bgWakeRequest();
+  bgHidden = (typeof document !== 'undefined' && document.hidden) || false;
+  bgDeferredPreview = false; bgDeferredPages = false;
   log('Starting. Files: ' + files.map(f => f.name).join(', '));
 
   try {
@@ -160,11 +319,23 @@ async function start() {
         await processPage(j, p, key, model, scale, useOcr, thinkLevel);
         doneCount++;
         progress();
-        renderPreview();
-        renderPages();
+        // Heavy table rebuilds are the #1 background jank as rows grow.
+        // In background: defer them, keep only cheap progress bar live.
+        if (bgHidden) {
+          bgDeferredPreview = true;
+          bgDeferredPages = true;
+        } else {
+          renderPreview();
+          renderPages();
+        }
       }
       if (stopAsked) break;
     }
+    // Flush any deferred UI + cache so background runs end with full tables.
+    try { flushCached(); } catch (e) {}
+    if (bgDeferredPreview) { bgDeferredPreview = false; try { renderPreview(); } catch (e) {} }
+    if (bgDeferredPages) { bgDeferredPages = false; try { renderPages(); } catch (e) {} }
+    progress();
     document.getElementById('upMsg').textContent =
       `Finished: ${allVoters.length} rows, ${pageIssues.length} review notes. Cost this run: ₹${(runCostUSD * USD_INR).toFixed(2)} (≈ ₹${(runCostUSD * USD_INR * (1 + GST_RATE)).toFixed(2)} incl. GST, ${runPaidCalls} paid calls). Download your Excel below.`;
     log(`Done. ${allVoters.length} rows. Download voters.xlsx now.`);
@@ -172,6 +343,10 @@ async function start() {
     document.getElementById('upMsg').textContent = 'Error: ' + e.message;
     log('ERROR: ' + e.message);
   }
+  try { flushCached(); } catch (e) {}
+  if (bgDeferredPreview) { bgDeferredPreview = false; try { renderPreview(); } catch (e) {} }
+  if (bgDeferredPages) { bgDeferredPages = false; try { renderPages(); } catch (e) {} }
+  bgWakeRelease();
   running = false;
   document.getElementById('startBtn').disabled = false;
   document.getElementById('stopBtn').disabled = true;
@@ -200,12 +375,17 @@ async function processPage(job, pageNum, key, model, scale, useOcr, thinkLevel) 
 
     const dark = darkFraction(canvas);
     let ocrText = '';
+    let ocrSmall = null;
     if (useOcr) {
       log(`${label}: OCR…`);
       try {
-        const r = await Tesseract.recognize(canvas, 'eng');
+        // Same Gemini High image; OCR runs on small copy (supporting-only).
+        // Full-res OCR on 216 DPI is what stalls background tabs under CPU load.
+        ocrSmall = downscaleForOcr(canvas);
+        const r = await Tesseract.recognize(ocrSmall, 'eng');
         ocrText = (r.data.text || '').slice(0, 12000);
       } catch (e) { log(`${label}: OCR skipped (${e.message})`); }
+      finally { try { if (ocrSmall && ocrSmall !== canvas) { ocrSmall.width = ocrSmall.height = 0; } } catch (e) {} }
     }
 
     if (dark < 0.0003 && ocrText.trim().length < 20) {
@@ -217,7 +397,8 @@ async function processPage(job, pageNum, key, model, scale, useOcr, thinkLevel) 
       return;
     }
 
-    const jpg = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+    // Async encode: identical bytes/quality to before, but doesn't block tab.
+    const jpg = await canvasToB64(canvas, 0.85);
     canvas.width = canvas.height = 0; // free memory
     log(`${label}: Gemini…`);
     const { data, usage, note } = await callGemini(key, model, pageNum, ocrText, jpg, thinkLevel);
