@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Voter Roll Extractor — PDF → Excel (100% in browser)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 <!-- PDF rendering in browser -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -13,35 +16,67 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
+<div class="bg-glow" aria-hidden="true"><span class="orb orb-a"></span><span class="orb orb-b"></span><span class="orb orb-c"></span></div>
+
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <div class="brand">
+      <span class="logo">VR</span>
+      <span class="brand-text"><strong>Voter Roll Extractor</strong><em>PDF → Excel</em></span>
+    </div>
+    <div class="pill-group">
+      <span class="pill pill-live"><span class="dot"></span>100% in browser</span>
+      <span class="pill">Private — nothing leaves your device except Google</span>
+    </div>
+  </div>
+</header>
+
 <div class="wrap">
-  <h1>Voter Roll Extractor <span class="sub">PDF → Excel, runs fully in your browser</span></h1>
-  <p class="hint">No server. Your PDF pages go one-by-one from <b>this page</b> straight to Google Gemini. Nothing is uploaded anywhere else.</p>
+  <section class="hero">
+    <div class="hero-copy">
+      <h1>Turn voter-roll PDFs into <span class="grad">clean Excel</span> in seconds.</h1>
+      <p class="hint hero-sub">No server. Your pages go one-by-one from <b>this page</b> straight to Google Gemini. Fast, private, aesthetic.</p>
+    </div>
+    <div class="hero-stats">
+      <div class="stat"><strong>1-by-1</strong><span>quota-friendly pages</span></div>
+      <div class="stat"><strong>AI + OCR</strong><span>Gemini vision = truth</span></div>
+      <div class="stat"><strong>.xlsx</strong><span>instant download</span></div>
+    </div>
+  </section>
+
+  <div class="steps">
+    <span class="step-chip active">1 Connect</span>
+    <span class="step-line"></span>
+    <span class="step-chip">2 Upload</span>
+    <span class="step-line"></span>
+    <span class="step-chip">3 Export</span>
+    <span class="step-line"></span>
+    <span class="step-chip">4 Track</span>
+  </div>
 
   <div class="card">
-    <h2>1. Google API key</h2>
-    <div class="row">
-      <input id="apiKey" type="password" placeholder="Paste Gemini API key (AIza…)" size="44">
-      <button class="small" onclick="saveKey()">Save key</button>
-      <button class="small" onclick="toggleKey()">Show</button>
+    <div class="card-head">
+      <span class="step">1</span>
+      <div><h2>Connect Gemini</h2><p class="hint">Paste your key once — it stays in this browser only.</p></div>
+      <span class="tag">API key</span>
     </div>
-    <div class="row">
-      <label>Model
+    <div class="row key-row">
+      <input id="apiKey" type="password" placeholder="Paste Gemini API key (AIza…)" size="44">
+      <button class="small btn-ghost" onclick="saveKey()">Save key</button>
+      <button class="small btn-ghost" onclick="toggleKey()">Show</button>
+    </div>
+    <div class="grid-3">
+      <label class="field">Model
         <select id="model">
-          <option value="gemini-3.8-flash">gemini-3.8-flash (max accuracy)</option>
-          <option value="gemini-2.5-flash">gemini-2.5-flash (balanced, cheaper)</option>
-          <option value="gemini-3.5-flash-lite" selected>gemini-3.5-flash-lite (economy, cheapest)</option>
+          <option value="gemini-3.8-flash" selected>gemini-3.8-flash (max accuracy)</option>
         </select>
       </label>
-      <label>Quality
+      <label class="field">Quality
         <select id="quality">
-          <option value="1.0">Eco (cheapest image, risky — test first)</option>
-          <option value="1.5" selected>Draft (cheap, 108 DPI)</option>
-          <option value="2">Standard (144 DPI)</option>
-          <option value="3">High (costlier, 216 DPI)</option>
+          <option value="3" selected>High (costlier, 216 DPI)</option>
         </select>
       </label>
-      <label class="chk"><input id="useOcr" type="checkbox" checked> Use OCR (slower, helps Gemini)</label>
-      <label>Thinking
+      <label class="field">Thinking
         <select id="thinkLevel">
           <option value="full" selected>Full (best accuracy)</option>
           <option value="light">Light (cheaper, test first)</option>
@@ -49,48 +84,71 @@
         </select>
       </label>
     </div>
-    <p class="hint" id="keyMsg">Get a free key: <a href="https://aistudio.google.com" target="_blank">aistudio.google.com → Get API key</a>. It stays in this browser only (localStorage).</p>
+    <label class="chk switch"><input id="useOcr" type="checkbox" checked><span class="track"><span class="thumb"></span></span> Use OCR <small>(slower, helps Gemini)</small></label>
+    <p class="hint key-msg" id="keyMsg">Get a free key: <a href="https://aistudio.google.com" target="_blank">aistudio.google.com → Get API key</a>. It stays in this browser only (localStorage).</p>
   </div>
 
-  <div class="card">
-    <h2>2. Upload voter-roll PDF(s)</h2>
-    <input type="file" id="files" accept=".pdf" multiple>
-    <div class="row">
-      <label>From page <input id="fromPage" type="number" min="1" placeholder="blank = all"></label>
-      <label>To page <input id="toPage" type="number" min="1" placeholder="blank = all"></label>
+  <div class="card card-accent">
+    <div class="card-head">
+      <span class="step">2</span>
+      <div><h2>Drop your voter-roll PDFs</h2><p class="hint">Background-safe — switch tabs, same High / Full quality.</p></div>
+      <span class="tag tag-green">Upload</span>
     </div>
-    <div class="row">
-      <button id="startBtn" onclick="start()">Start Processing</button>
-      <button id="stopBtn" onclick="stop()" disabled>Stop</button>
+    <label class="drop" for="files"><span class="drop-icon">＋</span><span><strong>Choose PDFs</strong> or drag them here<small>Multiple .pdf files supported</small></span></label>
+    <input type="file" id="files" accept=".pdf" multiple hidden>
+    <div class="row page-range">
+      <label class="field">From page <input id="fromPage" type="number" min="1" placeholder="blank = all"></label>
+      <label class="field">To page <input id="toPage" type="number" min="1" placeholder="blank = all"></label>
+    </div>
+    <div class="row actions">
+      <button id="startBtn" class="btn-primary" onclick="start()">▶ Start Processing</button>
+      <button id="stopBtn" class="btn-stop" onclick="stop()" disabled>Stop</button>
       <span id="upMsg" class="msg"></span>
     </div>
     <div class="bar"><div id="barFill"><span id="barPct">0%</span></div></div>
-    <div id="status" class="hint">Waiting… (0%)</div>
-    <div class="hint">Background-safe: you can switch tabs/windows — keep this tab open, same 3.8 / High / Full quality. Preview refreshes when you return.</div>
-    <div id="cost" class="hint">Cost this run: ₹0.00 ($0.0000) • 0 paid calls</div>
-    <div id="costTax" class="hint">Incl. ~18% GST ≈ ₹0.00 (what Google balance will show)</div>
+    <div class="meta-row">
+      <div id="status" class="hint">Waiting… (0%)</div>
+      <div class="cost-pills">
+        <div id="cost" class="hint cost">Cost this run: ₹0.00 ($0.0000) • 0 paid calls</div>
+        <div id="costTax" class="hint cost">Incl. ~18% GST ≈ ₹0.00 (what Google balance will show)</div>
+      </div>
+    </div>
   </div>
 
   <div class="card">
-    <h2>3. Preview + Download</h2>
-    <div class="row">
-      <button onclick="downloadExcel('voters')">⬇ Download voters.xlsx</button>
-      <button onclick="downloadExcel('review')">⬇ Download review.xlsx</button>
-      <button class="danger" onclick="clearAll()">🗑 Clear results</button>
+    <div class="card-head">
+      <span class="step">3</span>
+      <div><h2>Preview + Download</h2><p class="hint">Results appear live as pages finish.</p></div>
+      <span class="tag tag-violet">Export</span>
+    </div>
+    <div class="row actions">
+      <button class="btn-primary" onclick="downloadExcel('voters')">⬇ voters.xlsx</button>
+      <button class="btn-ghost-dark" onclick="downloadExcel('review')">⬇ review.xlsx</button>
+      <button class="danger" onclick="clearAll()">🗑 Clear</button>
       <span id="dlMsg" class="msg"></span>
     </div>
-    <div id="preview" class="hint">Results appear here as pages finish.</div>
+    <div id="preview" class="hint preview-box">Results appear here as pages finish.</div>
   </div>
 
-  <div class="card">
-    <h2>4. Log</h2>
-    <pre id="logs"></pre>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-head">
+        <span class="step step-dark">4</span>
+        <div><h2>Live log</h2><p class="hint">Every page, token + cost.</p></div>
+      </div>
+      <pre id="logs"></pre>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="step step-dark">5</span>
+        <div><h2>Rows per page</h2><p class="hint">Counts + review flags.</p></div>
+      </div>
+      <div id="pages" class="hint">No pages yet…</div>
+    </div>
   </div>
 
-  <div class="card">
-    <h2>5. Rows per page</h2>
-    <div id="pages" class="hint">No pages yet…</div>
-  </div>
+  <footer class="foot hint">Made for fast roll cleanup • Your key + files never touch our servers • Keep this tab open while processing</footer>
 </div>
 <script src="app.js"></script>
 </body>

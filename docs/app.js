@@ -15,9 +15,7 @@ const VALID_RELATIONS = ["FATHER","MOTHER","HUSBAND","WIFE","OTHER"];
 
 // Billed rates, USD per 1M tokens (Google AI Studio, 2026). Display only.
 const RATES = {
-  'gemini-3.8-flash': { in: 0.75, out: 3.75 },
-  'gemini-2.5-flash': { in: 0.30, out: 2.50 },
-  'gemini-3.5-flash-lite': { in: 0.30, out: 2.50 }
+  'gemini-3.8-flash': { in: 0.75, out: 3.75 }
 };
 const USD_INR = 88; // approx display rate
 const GST_RATE = 0.18; // India billing adds ~18% GST on top — meter shows both
