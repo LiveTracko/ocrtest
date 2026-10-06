@@ -22,9 +22,13 @@ Downloads folder, the Download button copies the latest Excel there on
 demand, and closing the window auto-saves any existing Excel there first —
 so data is never lost by an accidental close. "Clear Output" wipes only
 generated files inside output/ (snapshots included) after confirmation.
+
+History: bottom section shows PDFs added + Excels downloaded counts,
+persisted locally in state/history.json so they survive restarts.
 """
 from __future__ import annotations
 
+import json
 import os
 import queue
 import re
@@ -32,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -47,6 +52,8 @@ MERGE_DIR_NAME = "merge_parts"
 MERGED_VOTERS_NAME = "merged_voters.xlsx"
 MERGED_REVIEW_NAME = "merged_review.xlsx"
 LAST_INPUT_NAME = ".ui_last_input"
+HISTORY_NAME = "history.json"
+HISTORY_MAX_EVENTS = 50
 
 
 def _merge_dir() -> Path:
@@ -87,6 +94,79 @@ def _write_last_input(resolved: str) -> None:
         (SETTINGS.state_dir / LAST_INPUT_NAME).write_text(resolved, encoding="utf-8")
     except OSError:
         pass
+
+
+def _history_path() -> Path:
+    return SETTINGS.state_dir / HISTORY_NAME
+
+
+def _default_history() -> dict:
+    return {"pdfs_added": 0, "excels_downloaded": 0, "events": []}
+
+
+def _load_history() -> dict:
+    """Load local usage history (persists across restarts). Never raises."""
+    data = _default_history()
+    try:
+        p = _history_path()
+        if not p.exists():
+            return data
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            try:
+                data["pdfs_added"] = int(raw.get("pdfs_added", 0))
+            except (TypeError, ValueError):
+                data["pdfs_added"] = 0
+            try:
+                data["excels_downloaded"] = int(raw.get("excels_downloaded", 0))
+            except (TypeError, ValueError):
+                data["excels_downloaded"] = 0
+            events = raw.get("events", [])
+            data["events"] = [e for e in events if isinstance(e, dict)][-HISTORY_MAX_EVENTS:]
+    except (OSError, ValueError):
+        pass
+    return data
+
+
+def _save_history(data: dict) -> None:
+    """Persist history to state/history.json. Never raises."""
+    try:
+        SETTINGS.state_dir.mkdir(parents=True, exist_ok=True)
+        _history_path().write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _record_history(action: str, filename: str = "") -> dict:
+    """Record one 'added' (PDF uploaded) or 'downloaded' (Excel saved) event.
+
+    Returns the updated history dict. Never raises.
+    """
+    data = _load_history()
+    try:
+        if action == "added":
+            data["pdfs_added"] = int(data.get("pdfs_added", 0)) + 1
+        elif action == "downloaded":
+            data["excels_downloaded"] = int(data.get("excels_downloaded", 0)) + 1
+        events = data.get("events", [])
+        if not isinstance(events, list):
+            events = []
+        events.append({
+            "action": action,
+            "file": filename,
+            "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
+        data["events"] = events[-HISTORY_MAX_EVENTS:]
+        _save_history(data)
+    except Exception:
+        pass
+    return data
+
+
+def _clear_history() -> dict:
+    data = _default_history()
+    _save_history(data)
+    return data
 
 
 def build_pages_spec(from_raw: str, to_raw: str,
@@ -147,7 +227,7 @@ class UploadApp(tk.Tk):
         super().__init__()
         ensure_dirs()
         self.title("Voter Roll Extractor — PDF Upload")
-        self.geometry("740x640")
+        self.geometry("740x760")
         self.resizable(True, True)
 
         self.pdf_path: Path | None = None
@@ -161,6 +241,7 @@ class UploadApp(tk.Tk):
         self._build_widgets()
         self._refresh_merge_state()
         self._refresh_output_buttons()
+        self._refresh_history()
         self._poll_log_queue()
         # Safety net: accidental close must first save Excels to Downloads.
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -284,6 +365,24 @@ class UploadApp(tk.Tk):
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # History section (bottom): local counts that persist across restarts.
+        history = ttk.LabelFrame(main, text="History (stored locally)", padding=8)
+        history.pack(fill=tk.X, pady=(6, 0))
+        self.history_var = tk.StringVar(value="PDFs added: 0  •  Excels downloaded: 0")
+        ttk.Label(history, textvariable=self.history_var,
+                  font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        self.history_detail_var = tk.StringVar(value="")
+        ttk.Label(history, textvariable=self.history_detail_var,
+                  foreground="gray", wraplength=640,
+                  justify=tk.LEFT).pack(anchor="w", pady=(2, 0))
+        hist_row = ttk.Frame(history)
+        hist_row.pack(fill=tk.X, pady=(6, 0))
+        self.clear_history_btn = ttk.Button(hist_row, text="Clear History",
+                                            command=self.on_clear_history)
+        self.clear_history_btn.pack(side=tk.LEFT)
+        ttk.Label(hist_row, text="Saved in state/history.json — stays after restart.",
+                  foreground="gray").pack(side=tk.LEFT, padx=6)
+
     # ---------------------------------------------------------------- helpers
     def log(self, msg: str) -> None:
         self.log_queue.put(msg)
@@ -405,6 +504,47 @@ class UploadApp(tk.Tk):
             has_excel = False
         self.download_btn.configure(state=tk.NORMAL if has_excel else tk.DISABLED)
 
+    # ---------------------------------------------------------------- history
+    def _refresh_history(self, data: dict | None = None) -> None:
+        """Update bottom History labels from local state/history.json."""
+        try:
+            d = data if data is not None else _load_history()
+            added = int(d.get("pdfs_added", 0))
+            downloaded = int(d.get("excels_downloaded", 0))
+        except (TypeError, ValueError):
+            added, downloaded = 0, 0
+            d = _default_history()
+        try:
+            self.history_var.set(
+                f"PDFs added: {added}  •  Excels downloaded: {downloaded}")
+        except (AttributeError, tk.TclError):
+            pass
+        # Show last 3 events as detail line (file + action).
+        try:
+            events = d.get("events", []) if isinstance(d, dict) else []
+            recent = events[-3:][::-1] if isinstance(events, list) else []
+            if recent:
+                parts = []
+                for e in recent:
+                    act = "Added" if e.get("action") == "added" else "Downloaded"
+                    parts.append(f"{act}: {e.get('file', '')}")
+                self.history_detail_var.set("Recent: " + "  |  ".join(parts))
+            else:
+                self.history_detail_var.set("No activity yet — upload a PDF to begin.")
+        except (AttributeError, tk.TclError):
+            pass
+
+    def on_clear_history(self) -> None:
+        """Clear History button: reset local counts (asks first)."""
+        if not messagebox.askyesno(
+                "Clear History",
+                "Reset history counts (PDFs added / downloaded)?\n"
+                "This only clears state/history.json."):
+            return
+        data = _clear_history()
+        self.log("[HISTORY] cleared.")
+        self._refresh_history(data)
+
     # ---------------------------------------------------------------- downloads safety net
     def _backup_excels_to_downloads(self, reason: str) -> list[Path]:
         """Copy latest Excel(s) into OS Downloads. Never raises; returns saved paths."""
@@ -521,6 +661,12 @@ class UploadApp(tk.Tk):
             text=f"Selected: {self.pdf_path.name}{pages_info}\nPath: {self.pdf_path}")
         self.status_var.set("PDF ready — set From/To pages (blank = all), then Start.")
         self.log(f"[UPLOAD] {self.pdf_path}{pages_info}")
+        # History: count this PDF as added (persisted locally).
+        try:
+            data = _record_history("added", self.pdf_path.name)
+            self._refresh_history(data)
+        except Exception:
+            pass
         self._set_busy(False)
         self._progress_begin(self.total_pages or 0)
         # keep bar at 0% until Start is pressed
@@ -806,6 +952,12 @@ class UploadApp(tk.Tk):
         self.log(f"[DOWNLOAD] {src.name} -> {msg}")
         self._refresh_output_buttons()
         if dest is not None:
+            # History: count this Excel as downloaded (persisted locally).
+            try:
+                data = _record_history("downloaded", dest.name)
+                self._refresh_history(data)
+            except Exception:
+                pass
             messagebox.showinfo("Download saved", f"Excel saved to:\n{dest}")
         else:
             messagebox.showerror("Download failed", msg)

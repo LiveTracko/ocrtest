@@ -37,6 +37,57 @@ function charge(model, usage, label) {
   log(`${label}: tokens in=${inp} out=${out} • ₹${(usd * USD_INR).toFixed(2)}`);
 }
 
+// ---------- history (localStorage — PDFs added + Excels downloaded, persists) ----------
+const HIST_KEY = 'vrHistoryV1';
+const HIST_MAX = 50;
+function loadHistory() {
+  try {
+    const h = JSON.parse(localStorage.getItem(HIST_KEY) || '{}');
+    return {
+      added: (+h.added) || 0,
+      downloaded: (+h.downloaded) || 0,
+      events: Array.isArray(h.events) ? h.events.slice(-HIST_MAX) : []
+    };
+  } catch (e) { return { added: 0, downloaded: 0, events: [] }; }
+}
+function saveHistory(h) {
+  try { localStorage.setItem(HIST_KEY, JSON.stringify(h)); } catch (e) {}
+}
+function renderHistory() {
+  const h = loadHistory();
+  const a = document.getElementById('histAdded');
+  const d = document.getElementById('histDownloaded');
+  const list = document.getElementById('histList');
+  if (a) a.textContent = h.added;
+  if (d) d.textContent = h.downloaded;
+  if (!list) return;
+  if (!h.events.length) { list.innerHTML = 'No activity yet…'; return; }
+  const recent = h.events.slice(-10).reverse();
+  let s = '<div class="tblwrap"><table><tr><th>Action</th><th>File</th><th>Time</th></tr>';
+  for (const e of recent) {
+    const act = e.action === 'added' ? 'Added PDF' : 'Downloaded Excel';
+    let when = '';
+    try { when = new Date(e.time).toLocaleString(); } catch (ex) { when = e.time || ''; }
+    s += `<tr><td>${esc(act)}</td><td>${esc(e.file || '')}</td><td>${esc(when)}</td></tr>`;
+  }
+  list.innerHTML = s + '</table></div>';
+}
+function recordHistory(action, file) {
+  const h = loadHistory();
+  if (action === 'added') h.added = (h.added || 0) + 1;
+  else if (action === 'downloaded') h.downloaded = (h.downloaded || 0) + 1;
+  else return;
+  h.events.push({ action, file: file || '', time: new Date().toISOString() });
+  h.events = h.events.slice(-HIST_MAX);
+  saveHistory(h);
+  renderHistory();
+}
+function clearHistory() {
+  if (!confirm('Clear local history counts?')) return;
+  saveHistory({ added: 0, downloaded: 0, events: [] });
+  renderHistory();
+}
+
 function pagePrompt(pageNum, ocrText) {
   return `Extract voter records from this Indian electoral-roll page scan. IMAGE is truth; OCR below is supporting only (correct it from image). Never guess/invent/merge/split voters; unreadable -> null + needs_review.\nPage: ${pageNum}\nOCR (may err):\n---\n${ocrText}\n---\nReturn JSON ONLY, no fences:\n{"page_number": ${pageNum}, "voters": [{"serial_number": 1, "epic_number": "ABC1234567", "name": "RAMESH KUMAR", "relation_type": "FATHER", "relation_name": "SURESH KUMAR", "house_number": "125", "age": 45, "gender": "Male", "confidence": "HIGH", "needs_review": false, "review_reason": null}]}\nrelation_type: FATHER/MOTHER/HUSBAND/WIFE/OTHER/null. gender: Male/Female/Other/null. confidence HIGH only if all fields clear; else MEDIUM/LOW + needs_review + review_reason. Copy EPIC/house_number EXACTLY. age integer/null. To keep output small you MAY omit needs_review when false and review_reason when null; always include every other field with exact names. Empty page -> {"page_number": N, "voters": []}.`;
 }
@@ -294,6 +345,8 @@ async function start() {
   bgHidden = (typeof document !== 'undefined' && document.hidden) || false;
   bgDeferredPreview = false; bgDeferredPages = false;
   log('Starting. Files: ' + files.map(f => f.name).join(', '));
+  // History: count each added PDF (persisted in localStorage).
+  try { for (const f of files) recordHistory('added', f.name); } catch (e) {}
 
   try {
     // count total first (fast, no AI cost)
@@ -587,8 +640,11 @@ function downloadExcel(kind) {
     { header: kind === 'voters' ? VOTER_COLUMNS : REVIEW_COLUMNS });
   ws['!cols'] = (kind === 'voters' ? VOTER_COLUMNS : REVIEW_COLUMNS).map(() => ({ wch: 18 }));
   XLSX.utils.book_append_sheet(wb, ws, kind === 'voters' ? 'VOTERS' : 'REVIEW');
-  XLSX.writeFile(wb, kind === 'voters' ? 'voters.xlsx' : 'review.xlsx');
-  document.getElementById('dlMsg').textContent = 'Downloaded ' + (kind === 'voters' ? 'voters.xlsx' : 'review.xlsx') + ' ✓';
+  const fname = kind === 'voters' ? 'voters.xlsx' : 'review.xlsx';
+  XLSX.writeFile(wb, fname);
+  document.getElementById('dlMsg').textContent = 'Downloaded ' + fname + ' ✓';
+  // History: count each Excel download (persisted in localStorage).
+  try { recordHistory('downloaded', fname); } catch (e) {}
 }
 
 function clearAll() {
@@ -603,3 +659,6 @@ function clearAll() {
   if (pctEl) pctEl.textContent = '0%';
   document.getElementById('status').textContent = 'Cleared. (0%)';
 }
+
+// Render persisted history on every visit.
+try { renderHistory(); } catch (e) {}

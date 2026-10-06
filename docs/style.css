@@ -126,6 +126,11 @@ tr:nth-child(even) td{background:#fafaff}
 .ok{background:var(--green)} .rev{background:var(--amber)} .fail{background:var(--red)}
 
 .foot{text-align:center;margin:18px 0 8px;font-size:12px}
+.history-stats{display:flex;gap:10px;align-items:stretch}
+.history-stats .stat{flex:1}
+.history-stats button{align-self:center}
+#histList{margin-top:4px}
+#histList table{font-size:12px}
 @media(max-width:640px){
   .topbar-inner{justify-content:center;text-align:center}
   .brand-text{align-items:flex-start}
