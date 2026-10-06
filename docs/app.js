@@ -324,12 +324,81 @@ function toggleKey() {
 }
 loadKey();
 
+// ---------- file picker (show chosen PDFs + drag & drop) ----------
+function fmtSize(n) {
+  if (n == null || isNaN(n)) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+function refreshFileList() {
+  const input = document.getElementById('files');
+  const box = document.getElementById('fileList');
+  const msg = document.getElementById('upMsg');
+  const files = input ? [...input.files] : [];
+  if (!box) return;
+  if (!files.length) {
+    box.innerHTML = 'No file chosen yet…';
+    return;
+  }
+  const bad = files.filter(f => !/\.pdf$/i.test(f.name || ''));
+  let h = `<p><b>${files.length} PDF${files.length > 1 ? 's' : ''} selected ✓</b></p><div class="tblwrap"><table><tr><th>File</th><th>Size</th></tr>`;
+  for (const f of files.slice(0, 20)) {
+    h += `<tr><td>${esc(f.name)}</td><td>${esc(fmtSize(f.size))}</td></tr>`;
+  }
+  if (files.length > 20) h += `<tr><td colspan="2">…and ${files.length - 20} more</td></tr>`;
+  box.innerHTML = h + '</table></div>';
+  if (bad.length && msg) msg.textContent = `Note: ${bad.length} file(s) don't end with .pdf — Start will still try them.`;
+  else if (msg && !running) msg.textContent = 'Ready — press ▶ Start Processing.';
+}
+function wireFilePicker() {
+  const input = document.getElementById('files');
+  const zone = document.getElementById('dropZone');
+  if (!input || !zone) return;
+  // Clicking the zone opens the dialog (label for=files); show names after pick.
+  input.addEventListener('change', refreshFileList);
+  // Real drag & drop (the old text promised it but nothing handled it).
+  ['dragenter', 'dragover'].forEach(ev => zone.addEventListener(ev, (e) => {
+    e.preventDefault();
+    zone.classList.add('drag');
+  }));
+  ['dragleave', 'drop'].forEach(ev => zone.addEventListener(ev, (e) => {
+    e.preventDefault();
+    if (ev === 'dragleave' && e.relatedTarget && zone.contains(e.relatedTarget)) return;
+    zone.classList.remove('drag');
+  }));
+  zone.addEventListener('drop', (e) => {
+    const dt = e.dataTransfer;
+    if (!dt || !dt.files || !dt.files.length) return;
+    try {
+      // Put dropped files into the real input so Start picks them up.
+      const store = new DataTransfer();
+      for (const f of dt.files) store.items.add(f);
+      input.files = store.files;
+    } catch (err) {
+      // Old browser fallback: stash on the element for start() to read.
+      input._droppedFiles = [...dt.files];
+    }
+    refreshFileList();
+  });
+  // start() helper: dropped-file fallback for very old browsers.
+  if (!input._filesOrDropped) {
+    Object.defineProperty(input, '_filesOrDropped', {
+      get() { return (this._droppedFiles && this._droppedFiles.length) ? this._droppedFiles : [...this.files]; }
+    });
+  }
+  refreshFileList();
+}
+try { wireFilePicker(); } catch (e) {}
+
 // ---------- main ----------
 async function start() {
   const key = (localStorage.getItem('gemKey') || document.getElementById('apiKey').value || '').trim();
   if (!key) { alert('Enter your Gemini API key first (section 1).'); return; }
   if (document.getElementById('apiKey').value.trim()) saveKey();
-  const files = [...document.getElementById('files').files];
+  const fileInput = document.getElementById('files');
+  const files = (fileInput._filesOrDropped && fileInput._filesOrDropped.length)
+    ? [...fileInput._filesOrDropped] : [...fileInput.files];
   if (!files.length) { alert('Choose at least one PDF.'); return; }
   const fromP = parseInt(document.getElementById('fromPage').value) || null;
   const toP = parseInt(document.getElementById('toPage').value) || null;

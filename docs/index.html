@@ -94,8 +94,9 @@
       <div><h2>Drop your voter-roll PDFs</h2><p class="hint">Background-safe — switch tabs, same High / Full quality.</p></div>
       <span class="tag tag-green">Upload</span>
     </div>
-    <label class="drop" for="files"><span class="drop-icon">＋</span><span><strong>Choose PDFs</strong> or drag them here<small>Multiple .pdf files supported</small></span></label>
-    <input type="file" id="files" accept=".pdf" multiple hidden>
+    <label class="drop" for="files" id="dropZone"><span class="drop-icon">＋</span><span><strong>Choose PDFs</strong> or drag them here<small>Multiple .pdf files supported</small></span></label>
+    <input type="file" id="files" accept=".pdf,application/pdf" multiple hidden>
+    <div id="fileList" class="hint file-list">No file chosen yet…</div>
     <div class="row page-range">
       <label class="field">From page <input id="fromPage" type="number" min="1" placeholder="blank = all"></label>
       <label class="field">To page <input id="toPage" type="number" min="1" placeholder="blank = all"></label>
