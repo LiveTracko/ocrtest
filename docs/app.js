@@ -2,9 +2,21 @@
  * Flow per page: PDF.js render -> canvas JPEG -> Tesseract OCR (supporting) ->
  * Gemini Vision (image = truth) -> JS validation -> rows table -> SheetJS Excel.
  * Pages are sent ONE BY ONE, sequentially (kind to quota + memory).
+ *
+ * HARD RULE: no top-level statement may throw when a CDN is blocked —
+ * a single throw here used to kill ALL init (file picker included).
  */
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+try {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+} catch (e) {
+  // pdf.js CDN blocked/failed — start() shows a clear error instead of silent death.
+}
+function pdfEngineReady() {
+  try {
+    return (typeof pdfjsLib !== 'undefined') && !!(pdfjsLib && pdfjsLib.getDocument);
+  } catch (e) { return false; }
+}
 
 const VOTER_COLUMNS = ["Page Number","Serial Number","EPIC Number","Name","Relation Type",
   "Relation Name","House Number","Age","Gender","Confidence","Validation Status","Review Reason"];
@@ -322,7 +334,7 @@ function toggleKey() {
   const i = document.getElementById('apiKey');
   i.type = i.type === 'password' ? 'text' : 'password';
 }
-loadKey();
+try { loadKey(); } catch (e) {}
 
 // ---------- file picker (show chosen PDFs + drag & drop) ----------
 function fmtSize(n) {
@@ -331,16 +343,29 @@ function fmtSize(n) {
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
   return (n / (1024 * 1024)).toFixed(1) + ' MB';
 }
-function refreshFileList() {
-  const input = document.getElementById('files');
-  const box = document.getElementById('fileList');
-  const msg = document.getElementById('upMsg');
-  const files = input ? [...input.files] : [];
-  if (!box) return;
-  if (!files.length) {
-    box.innerHTML = 'No file chosen yet…';
-    return;
+// Explicit opener (single path — does NOT rely on <label for=> forwarding).
+function pickFiles() {
+  try {
+    const input = document.getElementById('files');
+    if (input) input.click();
+  } catch (e) {
+    const msg = document.getElementById('upMsg');
+    if (msg) msg.textContent = 'Could not open the file dialog — check browser permissions and try again.';
   }
+}
+function refreshFileList() {
+  // Must never throw: this is the user's only proof their PDF registered.
+  try {
+    const input = document.getElementById('files');
+    const box = document.getElementById('fileList');
+    const msg = document.getElementById('upMsg');
+    const files = input ? [...input.files] : [];
+    if (!box) return;
+    if (!files.length) {
+      // NOTE: this exact text is written by JS — if you see it, page JS is alive.
+      box.innerHTML = 'No file chosen yet — click the box above to choose.';
+      return;
+    }
   const bad = files.filter(f => !/\.pdf$/i.test(f.name || ''));
   let h = `<p><b>${files.length} PDF${files.length > 1 ? 's' : ''} selected ✓</b></p><div class="tblwrap"><table><tr><th>File</th><th>Size</th></tr>`;
   for (const f of files.slice(0, 20)) {
@@ -350,13 +375,20 @@ function refreshFileList() {
   box.innerHTML = h + '</table></div>';
   if (bad.length && msg) msg.textContent = `Note: ${bad.length} file(s) don't end with .pdf — Start will still try them.`;
   else if (msg && !running) msg.textContent = 'Ready — press ▶ Start Processing.';
+  } catch (e) {
+    try {
+      const box = document.getElementById('fileList');
+      if (box) box.textContent = 'File chosen, but preview failed — press Start anyway.';
+    } catch (e2) {}
+  }
 }
 function wireFilePicker() {
   const input = document.getElementById('files');
   const zone = document.getElementById('dropZone');
   if (!input || !zone) return;
-  // Clicking the zone opens the dialog (label for=files); show names after pick.
-  input.addEventListener('change', refreshFileList);
+  // Belt and suspenders: inline onchange ALSO calls refreshFileList (see index.html),
+  // so selection registers even if this listener ever failed to attach.
+  try { input.addEventListener('change', refreshFileList); } catch (e) {}
   // Real drag & drop (the old text promised it but nothing handled it).
   ['dragenter', 'dragover'].forEach(ev => zone.addEventListener(ev, (e) => {
     e.preventDefault();
@@ -400,6 +432,13 @@ async function start() {
   const files = (fileInput._filesOrDropped && fileInput._filesOrDropped.length)
     ? [...fileInput._filesOrDropped] : [...fileInput.files];
   if (!files.length) { alert('Choose at least one PDF.'); return; }
+  if (!pdfEngineReady()) {
+    const msg = 'PDF engine failed to load (pdf.js CDN blocked?) — check internet / adblock, then refresh this page and try again.';
+    try { document.getElementById('upMsg').textContent = msg; } catch (e) {}
+    try { log('ERROR: ' + msg); } catch (e2) {}
+    alert(msg);
+    return;
+  }
   const fromP = parseInt(document.getElementById('fromPage').value) || null;
   const toP = parseInt(document.getElementById('toPage').value) || null;
   if (fromP && toP && fromP > toP) { alert('From page cannot be greater than To page.'); return; }
