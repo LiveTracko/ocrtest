@@ -75,6 +75,10 @@ input[type=password],input[type=text],input[type=number],select{
   font-size:14px;font-weight:500;color:var(--ink);outline:none;transition:.18s;text-transform:none;letter-spacing:normal;
 }
 input:focus,select:focus{border-color:var(--violet);background:#fff;box-shadow:0 0 0 4px rgba(124,58,237,.12)}
+.static-val{
+  width:100%;padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);background:#f3f4f6;
+  font-size:14px;font-weight:600;color:var(--ink);text-transform:none;letter-spacing:normal;
+}
 input[type=file]{padding:6px}
 
 .chk{font-size:13px;color:#374151;font-weight:600;display:flex;align-items:center;gap:8px}

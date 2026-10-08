@@ -66,16 +66,14 @@
       <button class="small btn-ghost" onclick="toggleKey()">Show</button>
     </div>
     <div class="grid-3">
-      <label class="field">Model
-        <select id="model">
-          <option value="gemini-3.8-flash" selected>gemini-3.8-flash (max accuracy)</option>
-        </select>
-      </label>
-      <label class="field">Quality
-        <select id="quality">
-          <option value="3" selected>High (costlier, 216 DPI)</option>
-        </select>
-      </label>
+      <div class="field">Model
+        <div class="static-val">gemini-3.8-flash (max accuracy)</div>
+        <input type="hidden" id="model" value="gemini-3.8-flash">
+      </div>
+      <div class="field">Quality
+        <div class="static-val">High (216 DPI)</div>
+        <input type="hidden" id="quality" value="3">
+      </div>
       <label class="field">Thinking
         <select id="thinkLevel">
           <option value="full" selected>Full (best accuracy)</option>
